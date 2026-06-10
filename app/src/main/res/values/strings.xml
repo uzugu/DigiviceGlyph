@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Digivice Glyph</string>
+    <string name="toy_name">Digivice Glyph</string>
+    <string name="toy_summary">Glyph Matrix host app for the old Digivice V1 GameMaker emulator</string>
+    <string name="app_subtitle">Separate Nothing Glyph app for porting the abandoned GameMaker Digivice Android build.</string>
+    <string name="device_status_label">Glyph status</string>
+    <string name="device_status_available">Nothing Glyph Matrix detected. Toy service can bind to Glyph hardware.</string>
+    <string name="device_status_unavailable">Glyph Matrix not detected on this device. The app can still be built, but hardware output will not activate.</string>
+    <string name="port_status_label">Port status</string>
+    <string name="port_status_text">The first native runtime slice is live: Digivice V1 save data, step progression, 500-step encounter logic, starter selection, and a real stateful Glyph renderer are wired. Battle flow and sprite-faithful rendering still need more porting work.</string>
+    <string name="preview_label">Live Digivice View</string>
+    <string name="start_preview">Start Digivice V1</string>
+    <string name="stop_preview">Stop Digivice V1</string>
+    <string name="button_a">A Confirm</string>
+    <string name="button_b">B Advance</string>
+    <string name="button_c">C Back</string>
+    <string name="open_settings">Open System Settings</string>
+    <string name="control_notes">The phone view mirrors the same runtime used by the Glyph service. Use A to confirm, B to step or advance, and C to back out. The motion and Glyph-button controls still work when the service is running.</string>
+    <string name="preview_started">Preview service started</string>
+    <string name="notification_required">Notification permission is required to keep the preview service alive.</string>
+    <string name="notification_channel_name">Digivice Glyph Preview</string>
+    <string name="notification_title">Digivice Glyph Preview</string>
+    <string name="notification_text">Running the native Digivice V1 Glyph runtime.</string>
+</resources>

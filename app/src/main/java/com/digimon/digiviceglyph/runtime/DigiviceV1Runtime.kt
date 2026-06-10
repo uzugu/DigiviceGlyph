@@ -1,0 +1,1809 @@
+package com.digimon.digiviceglyph.runtime
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
+import android.graphics.Rect
+import android.graphics.RectF
+import com.digimon.digiviceglyph.input.GlyphButton
+import com.digimon.digiviceglyph.input.GlyphButtonSink
+import kotlin.math.roundToInt
+import kotlin.random.Random
+
+class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
+    private enum class Screen {
+        BOOT,
+        SELECT,
+        IDLE,
+        MENU,
+        STATUS,
+        STATUS_SELECT,
+        STATUS_MENU,
+        STATUS_DETAIL,
+        MAP,
+        MAP_CHANGE,
+        FINISH_GAME,
+        BATTLE,
+        RESCUE
+    }
+
+    private enum class BattlePhase {
+        ALERT,
+        MENU,
+        PUSH,
+        EVO,
+        EVO_SEQUENCE,
+        SWAP,
+        MINE_ATTACK,
+        ENEMY_ATTACK,
+        FINISH,
+        RESULT
+    }
+
+    private data class EnemyProfile(
+        val name: String,
+        val hp: Int,
+        val attack: Int
+    )
+
+    private data class BattleSession(
+        val enemyId: Int,
+        val enemyName: String,
+        val boss: Boolean,
+        var mineHp: Int,
+        var enemyHp: Int,
+        var currentEvo: Int = 0,
+        var turn: Int = 0,
+        var phase: BattlePhase = BattlePhase.ALERT,
+        var menuIndex: Int = 0,
+        var pushPress: Int = 0,
+        var evoCharge: Int = 0,
+        var swapIndex: Int = 0,
+        var resultText: String = "",
+        var escaped: Boolean = false,
+        var phaseStartedAtMs: Long = System.currentTimeMillis(),
+        var evoSuccess: Boolean = false,
+        var pendingMineHp: Int? = null,
+        var pendingEnemyHp: Int? = null,
+        var pendingTurn: Int? = null,
+        var hitSoundPlayed: Boolean = false
+    )
+
+    private data class RescueSession(
+        val charIndex: Int,
+        var charge: Int = 0,
+        var completed: Boolean = false,
+        var phase: Int = 0,
+        var visible: Boolean = true,
+        var filter: Int = 0,
+        var phaseStartedAtMs: Long = System.currentTimeMillis()
+    )
+
+    companion object {
+        private const val SIZE = 25
+        private const val PHONE_WIDTH = 160
+        private const val PHONE_HEIGHT = 160
+        private const val ON = Color.WHITE
+        private const val OFF = Color.BLACK
+        private const val AUTORUN_STEP_INTERVAL_MS = 650L
+        private val MENU_ITEMS = listOf("STAT", "MAP", "GAME", "CTRL", "MED", "LINK")
+        private val BATTLE_ITEMS = listOf("ATK", "EVO", "SWP", "RUN")
+        private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
+        private val ATTACK_SPRITES = arrayOf("spr_agu_attack", "spr_gabu_attack", "spr_biyo_attack", "spr_pal_attack", "spr_tento_attack", "spr_goma_attack", "spr_pata_attack", "spr_gato_attack")
+        private val HAPPY_SPRITES = arrayOf("spr_agu_happy", "spr_gabu_happy", "spr_biyo_happy", "spr_pal_happy", "spr_tento_happy", "spr_goma_happy", "spr_pata_happy", "spr_gato_happy")
+        private val DEFEAT_SPRITES = arrayOf("spr_agu_defeat", "spr_gabu_defeat", "spr_biyo_defeat", "spr_pal_defeat", "spr_tento_defeat", "spr_goma_defeat", "spr_pata_defeat", "spr_gato_defeat")
+        private val STEP_SPRITES = arrayOf("spr_agu_step", "spr_gabu_step", "spr_biyo_step", "spr_pal_step", "spr_tento_step", "spr_goma_step", "spr_pata_step", "spr_gato_step")
+        private val EVOLUTION_SPRITES = arrayOf(
+            arrayOf("spr_agu", "spr_grey", "spr_metalgrey"),
+            arrayOf("spr_gabu", "spr_garuru", "spr_weregaruru"),
+            arrayOf("spr_biyo", "spr_birdra", "spr_garuda"),
+            arrayOf("spr_pal", "spr_toge", "spr_lily"),
+            arrayOf("spr_tento", "spr_kabuteri", "spr_megakabuteri"),
+            arrayOf("spr_goma", "spr_ikaku", "spr_zudo"),
+            arrayOf("spr_pata", "spr_ange", "spr_magnaange"),
+            arrayOf("spr_gato", "spr_angewo_d", "spr_magnadra")
+        )
+        private val MAP_DISTANCES = intArrayOf(10000, 12000, 14000, 16000, 18000, 20000, 22000)
+        private val MAP_ENCOUNTERS = arrayOf(
+            intArrayOf(0, 1, 2),
+            intArrayOf(3, 0, 1),
+            intArrayOf(4, 5, 3),
+            intArrayOf(6, 7, 5),
+            intArrayOf(8, 6, 4),
+            intArrayOf(9, 10, 8),
+            intArrayOf(11, 9, 10)
+        )
+        private val BOSS_ENEMY_IDS = intArrayOf(12, 13, 14, 15, 16, 17, 18)
+        private val ENEMIES = listOf(
+            EnemyProfile("Scumon", 3, 1),
+            EnemyProfile("Numemon", 2, 1),
+            EnemyProfile("Shellmon", 2, 1),
+            EnemyProfile("Bakemon", 4, 1),
+            EnemyProfile("PicoDevimon", 4, 2),
+            EnemyProfile("Gazimon", 4, 1),
+            EnemyProfile("Hangyomon", 4, 2),
+            EnemyProfile("Anomalocarimon", 4, 2),
+            EnemyProfile("Tyranomon", 5, 2),
+            EnemyProfile("Phantomon", 5, 3),
+            EnemyProfile("Megadramon", 5, 2),
+            EnemyProfile("WaruMonzaemon", 6, 3),
+            EnemyProfile("Devimon", 4, 2),
+            EnemyProfile("Etemon", 5, 2),
+            EnemyProfile("Myotismon", 6, 3),
+            EnemyProfile("MetalSeadramon", 6, 3),
+            EnemyProfile("Puppetmon", 7, 3),
+            EnemyProfile("Mugendramon", 7, 4),
+            EnemyProfile("Piedmon", 8, 5)
+        )
+        private val ENEMY_SPRITES = arrayOf(
+            "spr_scumon",
+            "spr_numemon",
+            "spr_shellmon",
+            "spr_bakemon",
+            "spr_picodevimon",
+            "spr_gazimon",
+            "spr_hangyomon",
+            "spr_anomalocarimon",
+            "spr_tyranomon",
+            "spr_phantomon",
+            "spr_megadramon_s",
+            "spr_warumonzaemon",
+            "spr_devimon_digivice",
+            "spr_etemon",
+            "spr_myotismon",
+            "spr_metalseadramon",
+            "spr_puppetmon",
+            "spr_mugendramon",
+            "spr_piedmon"
+        )
+        private val FONT = mapOf(
+            '0' to listOf("111", "101", "101", "101", "111"),
+            '1' to listOf("010", "110", "010", "010", "111"),
+            '2' to listOf("111", "001", "111", "100", "111"),
+            '3' to listOf("111", "001", "111", "001", "111"),
+            '4' to listOf("101", "101", "111", "001", "001"),
+            '5' to listOf("111", "100", "111", "001", "111"),
+            '6' to listOf("111", "100", "111", "101", "111"),
+            '7' to listOf("111", "001", "010", "100", "100"),
+            '8' to listOf("111", "101", "111", "101", "111"),
+            '9' to listOf("111", "101", "111", "001", "111"),
+            'A' to listOf("010", "101", "111", "101", "101"),
+            'B' to listOf("110", "101", "110", "101", "110"),
+            'C' to listOf("011", "100", "100", "100", "011"),
+            'D' to listOf("110", "101", "101", "101", "110"),
+            'E' to listOf("111", "100", "110", "100", "111"),
+            'F' to listOf("111", "100", "110", "100", "100"),
+            'G' to listOf("011", "100", "101", "101", "011"),
+            'H' to listOf("101", "101", "111", "101", "101"),
+            'I' to listOf("111", "010", "010", "010", "111"),
+            'K' to listOf("101", "101", "110", "101", "101"),
+            'L' to listOf("100", "100", "100", "100", "111"),
+            'M' to listOf("101", "111", "111", "101", "101"),
+            'N' to listOf("101", "111", "111", "111", "101"),
+            'O' to listOf("111", "101", "101", "101", "111"),
+            'P' to listOf("110", "101", "110", "100", "100"),
+            'R' to listOf("110", "101", "110", "101", "101"),
+            'S' to listOf("011", "100", "010", "001", "110"),
+            'T' to listOf("111", "010", "010", "010", "010"),
+            'U' to listOf("101", "101", "101", "101", "111"),
+            'V' to listOf("101", "101", "101", "101", "010"),
+            'W' to listOf("101", "101", "111", "111", "101"),
+            'X' to listOf("101", "101", "010", "101", "101"),
+            'Y' to listOf("101", "101", "010", "010", "010")
+        )
+    }
+
+    private val pixels = IntArray(SIZE * SIZE)
+    private val bitmap = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
+    private val phoneBitmap = Bitmap.createBitmap(PHONE_WIDTH, PHONE_HEIGHT, Bitmap.Config.ARGB_8888)
+    private val phoneCanvas = Canvas(phoneBitmap)
+    private val phoneBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        style = Paint.Style.FILL
+    }
+    private val phoneFramePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+    }
+    private val phoneTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textSize = 16f
+        isFakeBoldText = true
+    }
+    private val phoneSmallTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        textSize = 11f
+    }
+    private val phoneSpritePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        isFilterBitmap = false
+        colorFilter = PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN)
+    }
+    private val phoneSrcRect = Rect()
+    private val phoneDstRect = Rect()
+    private val saveRepository = DigiviceV1SaveRepository(context.applicationContext)
+    private val spriteLibrary = GlyphSpriteLibrary(context.applicationContext)
+    private val exactPhoneRenderer = ExactPhoneRenderer(spriteLibrary)
+    private val audioManager = DigiviceAudioManager(context.applicationContext)
+
+    private var state: DigiviceV1State = saveRepository.load() ?: DigiviceV1State().also {
+        it.lastEncounter = calculateMilestone(it.distance, it.steps, it.dpower)
+    }
+    private var screen: Screen =
+        if (state.startSequencePending) Screen.BOOT else if (state.battlePending) Screen.BATTLE else Screen.IDLE
+    private var selectedChar = state.currentChar
+    private var menuIndex = 0
+    private var statusPage = 0
+    private var statusMode = 0
+    private var statusDetailPage = 0
+    private var mapPreviewArea = state.area
+    private var frameCounter = 0
+    private var lastStepAtMs = 0L
+    private var lastActionLabel = "BOOT"
+    private var lastActionAtMs = 0L
+    private var bootStage = if (state.startSequencePending) 0 else 7
+    private var bootFrame = 0
+    private var bootVisible = false
+    private var bootSlideX = 32
+    private var bootNextAtMs = if (state.startSequencePending) System.currentTimeMillis() + 100L else 0L
+    private var finishOffsetX = 32
+    private var finishAnimFrame = 0
+    private var finishNextAtMs = 0L
+    private var battleSession: BattleSession? = null
+    private var rescueSession: RescueSession? = null
+
+    override fun onButtonDown(button: GlyphButton) {
+        lastActionLabel = button.name
+        lastActionAtMs = System.currentTimeMillis()
+        when (button) {
+            GlyphButton.A -> handleConfirm()
+            GlyphButton.B -> handleAdvance()
+            GlyphButton.C -> handleBack()
+        }
+    }
+
+    override fun onButtonUp(button: GlyphButton) {
+    }
+
+    fun renderFrame(): Bitmap {
+        frameCounter++
+        maybeAutorun()
+        maybeAdvanceBootSequence()
+        ensureBattleSessionIfNeeded()
+        maybeAdvanceBattleAnimations()
+        maybeAdvanceRescueSequence()
+        maybeAdvanceFinishSequence()
+        pixels.fill(OFF)
+        drawFrame()
+        drawHeader()
+        when (screen) {
+            Screen.BOOT -> drawBootScreen()
+            Screen.SELECT -> drawSelectScreen()
+            Screen.IDLE -> drawIdleScreen()
+            Screen.MENU -> drawMenuScreen()
+            Screen.STATUS -> drawStatusScreen()
+            Screen.STATUS_SELECT -> drawSelectScreen()
+            Screen.STATUS_MENU -> drawStatusScreen()
+            Screen.STATUS_DETAIL -> drawStatusScreen()
+            Screen.MAP -> drawMapScreen()
+            Screen.MAP_CHANGE -> drawMapScreen()
+            Screen.FINISH_GAME -> drawIdleScreen()
+            Screen.BATTLE -> drawBattleScreen()
+            Screen.RESCUE -> drawRescueScreen()
+        }
+        bitmap.setPixels(pixels, 0, SIZE, 0, 0, SIZE, SIZE)
+        return bitmap
+    }
+
+    fun renderPhoneFrame(): Bitmap {
+        frameCounter++
+        maybeAutorun()
+        maybeAdvanceBootSequence()
+        ensureBattleSessionIfNeeded()
+        maybeAdvanceBattleAnimations()
+        maybeAdvanceRescueSequence()
+        maybeAdvanceFinishSequence()
+        return exactPhoneRenderer.render(buildPhoneSnapshot(), frameCounter)
+    }
+
+    fun renderGlyphContentFrame(): Bitmap {
+        frameCounter++
+        maybeAutorun()
+        maybeAdvanceBootSequence()
+        ensureBattleSessionIfNeeded()
+        maybeAdvanceBattleAnimations()
+        maybeAdvanceRescueSequence()
+        maybeAdvanceFinishSequence()
+        return exactPhoneRenderer.renderContent(buildPhoneSnapshot(), frameCounter)
+    }
+
+    private fun handleConfirm() {
+        when (screen) {
+            Screen.BOOT -> handleBootConfirm()
+            Screen.SELECT -> {
+                playSound(DigiviceAudioManager.Cue.START)
+                confirmStarterSelection()
+            }
+            Screen.IDLE -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                screen = if (state.battlePending) Screen.BATTLE else Screen.MENU
+            }
+            Screen.MENU -> handleMainMenuConfirm()
+            Screen.STATUS -> Unit
+            Screen.STATUS_SELECT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                statusMode = 0
+                statusDetailPage = 0
+                screen = Screen.STATUS_MENU
+            }
+            Screen.STATUS_MENU -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                statusDetailPage = 0
+                screen = Screen.STATUS_DETAIL
+            }
+            Screen.STATUS_DETAIL -> Unit
+            Screen.MAP -> {
+                if (!isGameComplete()) return
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                screen = Screen.MAP_CHANGE
+            }
+            Screen.MAP_CHANGE -> {
+                state.area = mapPreviewArea
+                state.distance = currentMapTargetDistance()
+                state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+                saveState()
+                playSound(DigiviceAudioManager.Cue.CHANGE)
+                screen = Screen.IDLE
+            }
+            Screen.FINISH_GAME -> Unit
+            Screen.BATTLE -> handleBattleConfirm()
+            Screen.RESCUE -> resolveRescue()
+        }
+    }
+
+    private fun handleAdvance() {
+        when (screen) {
+            Screen.BOOT -> handleBootAdvance()
+            Screen.SELECT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                selectedChar = (selectedChar + 1) % DigiviceV1State.DIGIMON_PROFILES.size
+            }
+            Screen.IDLE -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                performStep()
+            }
+            Screen.MENU -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                menuIndex = (menuIndex + 1) % MENU_ITEMS.size
+            }
+            Screen.STATUS -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                statusPage = (statusPage + 1) % 4
+            }
+            Screen.STATUS_SELECT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                state.currentChar = nextUnlockedChar(state.currentChar)
+                saveState()
+            }
+            Screen.STATUS_MENU -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                statusMode = (statusMode + 1) % 2
+            }
+            Screen.STATUS_DETAIL -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                statusDetailPage = (statusDetailPage + 1) % 3
+            }
+            Screen.MAP -> {
+                if (isGameComplete()) {
+                    playSound(DigiviceAudioManager.Cue.SELECT)
+                    mapPreviewArea = (mapPreviewArea + 1) % MAP_DISTANCES.size
+                }
+            }
+            Screen.MAP_CHANGE -> Unit
+            Screen.FINISH_GAME -> Unit
+            Screen.BATTLE -> handleBattleAdvance()
+            Screen.RESCUE -> {
+                val rescue = rescueSession ?: return
+                if (rescue.phase == 8) {
+                    rescue.charge = (rescue.charge + 2).coerceAtMost(20)
+                    rescue.filter = when {
+                        rescue.charge > 12 -> 2
+                        rescue.charge > 6 -> 1
+                        else -> 0
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleBack() {
+        when (screen) {
+            Screen.BOOT -> handleBootBack()
+            Screen.SELECT -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                screen = Screen.BOOT
+            }
+            Screen.IDLE -> {
+                state.autorun = !state.autorun
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                saveState()
+            }
+            Screen.MENU -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                screen = Screen.IDLE
+            }
+            Screen.STATUS -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                screen = Screen.MENU
+            }
+            Screen.STATUS_SELECT -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                screen = Screen.IDLE
+            }
+            Screen.STATUS_MENU -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                screen = Screen.STATUS_SELECT
+            }
+            Screen.STATUS_DETAIL -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                screen = Screen.IDLE
+            }
+            Screen.MAP -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                screen = Screen.MENU
+            }
+            Screen.MAP_CHANGE -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                screen = Screen.MAP
+            }
+            Screen.FINISH_GAME -> Unit
+            Screen.BATTLE -> handleBattleBack()
+            Screen.RESCUE -> Unit
+        }
+    }
+
+    private fun confirmStarterSelection() {
+        selectedChar = selectedChar.coerceIn(0, DigiviceV1State.DIGIMON_PROFILES.lastIndex)
+        state.currentChar = selectedChar
+        state.unlockedChars[selectedChar] = true
+        state.startSequencePending = false
+        state.defeat = false
+        state.distance = MAP_DISTANCES[state.area]
+        state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+        screen = if (state.battlePending) Screen.BATTLE else Screen.IDLE
+        saveState()
+    }
+
+    private fun handleBootConfirm() {
+        when (bootStage) {
+            0 -> {
+                playSound(DigiviceAudioManager.Cue.START)
+                bootStage = 1
+                bootFrame = 0
+                bootVisible = false
+                bootNextAtMs = System.currentTimeMillis() + 100L
+            }
+            3 -> {
+                playSound(DigiviceAudioManager.Cue.START)
+                selectedChar = selectedChar.coerceIn(0, DigiviceV1State.DIGIMON_PROFILES.lastIndex)
+                state.currentChar = selectedChar
+                state.unlockedChars[selectedChar] = true
+                bootStage = 4
+                bootFrame = 0
+                bootVisible = false
+                bootNextAtMs = System.currentTimeMillis() + 100L
+            }
+        }
+    }
+
+    private fun handleBootAdvance() {
+        if (bootStage == 3) {
+            playSound(DigiviceAudioManager.Cue.SELECT)
+            selectedChar = (selectedChar + 1) % DigiviceV1State.DIGIMON_PROFILES.size
+        }
+    }
+
+    private fun handleBootBack() {
+        if (bootStage == 3) {
+            playSound(DigiviceAudioManager.Cue.CANCEL)
+            resetBootSequence()
+        }
+    }
+
+    private fun handleMainMenuConfirm() {
+        playSound(DigiviceAudioManager.Cue.SELECT)
+        when (menuIndex) {
+            0 -> {
+                screen = Screen.STATUS_SELECT
+            }
+            1 -> {
+                mapPreviewArea = state.area
+                screen = Screen.MAP
+            }
+            2 -> {
+                statusPage = 0
+                screen = Screen.STATUS
+            }
+            3 -> {
+                state.autorun = !state.autorun
+                saveState()
+            }
+            4 -> {
+                if (state.defeat) {
+                    state.defeat = false
+                    saveState()
+                }
+                screen = Screen.IDLE
+            }
+            5 -> resetProgress()
+        }
+    }
+
+    private fun handleBattleConfirm() {
+        val session = battleSession ?: return
+        when (session.phase) {
+            BattlePhase.ALERT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                setBattlePhase(session, BattlePhase.MENU)
+            }
+            BattlePhase.MENU -> {
+                when (BATTLE_ITEMS[session.menuIndex]) {
+                    "ATK" -> {
+                        playSound(DigiviceAudioManager.Cue.SELECT)
+                        setBattlePhase(session, BattlePhase.PUSH)
+                        session.pushPress = 0
+                    }
+                    "EVO" -> {
+                        if (canEvolveInBattle(session)) {
+                            playSound(DigiviceAudioManager.Cue.SELECT)
+                            state.dpower -= evolutionCost(session.currentEvo)
+                            setBattlePhase(session, BattlePhase.EVO)
+                            session.evoCharge = 0
+                            saveState()
+                        } else {
+                            playSound(DigiviceAudioManager.Cue.CANCEL)
+                        }
+                    }
+                    "SWP" -> {
+                        if (hasSwappablePartyMember()) {
+                            playSound(DigiviceAudioManager.Cue.SELECT)
+                            setBattlePhase(session, BattlePhase.SWAP)
+                            session.swapIndex = nextSwappableIndex(state.currentChar)
+                        } else {
+                            playSound(DigiviceAudioManager.Cue.CANCEL)
+                        }
+                    }
+                    "RUN" -> {
+                        playSound(DigiviceAudioManager.Cue.CANCEL)
+                        resolveRun()
+                    }
+                }
+            }
+            BattlePhase.PUSH -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                resolvePush()
+            }
+            BattlePhase.EVO -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                beginEvolutionSequence()
+            }
+            BattlePhase.SWAP -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                commitSwap()
+            }
+            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> Unit
+            BattlePhase.FINISH, BattlePhase.RESULT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                finalizeBattleResult()
+            }
+        }
+    }
+
+    private fun handleBattleAdvance() {
+        val session = battleSession ?: return
+        when (session.phase) {
+            BattlePhase.ALERT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                setBattlePhase(session, BattlePhase.MENU)
+            }
+            BattlePhase.MENU -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                session.menuIndex = (session.menuIndex + 1) % BATTLE_ITEMS.size
+            }
+            BattlePhase.PUSH -> session.pushPress = (session.pushPress + 2).coerceAtMost(40)
+            BattlePhase.EVO -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                val next = session.evoCharge + Random.nextInt(0, 3)
+                session.evoCharge = if (next > 10) 3 else next
+            }
+            BattlePhase.SWAP -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                session.swapIndex = nextSwappableIndex(session.swapIndex)
+            }
+            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.FINISH -> Unit
+            BattlePhase.RESULT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                finalizeBattleResult()
+            }
+        }
+    }
+
+    private fun handleBattleBack() {
+        val session = battleSession ?: return
+        when (session.phase) {
+            BattlePhase.ALERT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                setBattlePhase(session, BattlePhase.MENU)
+            }
+            BattlePhase.MENU -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                resolveRun()
+            }
+            BattlePhase.PUSH -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                setBattlePhase(session, BattlePhase.MENU)
+            }
+            BattlePhase.EVO -> Unit
+            BattlePhase.SWAP -> {
+                playSound(DigiviceAudioManager.Cue.CANCEL)
+                setBattlePhase(session, BattlePhase.MENU)
+            }
+            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> Unit
+            BattlePhase.FINISH, BattlePhase.RESULT -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                finalizeBattleResult()
+            }
+        }
+    }
+
+    private fun maybeAutorun() {
+        if (!state.autorun || screen != Screen.IDLE) return
+        val now = System.currentTimeMillis()
+        if (now - lastStepAtMs >= AUTORUN_STEP_INTERVAL_MS) {
+            performStep()
+        }
+    }
+
+    private fun maybeAdvanceBootSequence() {
+        if (screen != Screen.BOOT || !state.startSequencePending) return
+        val now = System.currentTimeMillis()
+        if (bootNextAtMs == 0L || now < bootNextAtMs) return
+
+        when (bootStage) {
+            0 -> {
+                bootFrame += 1
+                if (bootFrame > 8) {
+                    bootFrame = 0
+                }
+                bootNextAtMs = now + 100L
+            }
+            1 -> {
+                if (bootFrame >= 2) {
+                    bootStage = 2
+                    bootFrame = 0
+                    bootVisible = false
+                    bootNextAtMs = now + 100L
+                } else {
+                    bootFrame += 1
+                    bootNextAtMs = now + 100L
+                }
+            }
+            2 -> {
+                bootVisible = !bootVisible
+                bootFrame += 1
+                if (bootFrame > 8) {
+                    bootStage = 3
+                    bootFrame = 0
+                    bootVisible = true
+                    bootNextAtMs = 0L
+                } else {
+                    bootNextAtMs = now + 100L
+                }
+            }
+            4 -> {
+                bootVisible = !bootVisible
+                bootFrame += 1
+                if (bootFrame > 9) {
+                    bootStage = 5
+                    bootFrame = 0
+                    bootSlideX = 32
+                    bootNextAtMs = now + 60L
+                } else {
+                    bootNextAtMs = now + 100L
+                }
+            }
+            5 -> {
+                bootSlideX -= 1
+                if (bootSlideX <= 8) {
+                    bootSlideX = 8
+                    bootStage = 6
+                    bootFrame = 0
+                    bootVisible = false
+                    bootNextAtMs = now + 600L
+                } else {
+                    bootNextAtMs = now + 60L
+                }
+            }
+            6 -> {
+                bootVisible = !bootVisible
+                bootFrame += 1
+                if (bootFrame == 5) {
+                    finalizeBootSequence()
+                } else {
+                    bootNextAtMs = now + 600L
+                }
+            }
+        }
+    }
+
+    private fun maybeAdvanceBattleAnimations() {
+        val session = battleSession ?: return
+        if (screen != Screen.BATTLE) return
+        when (session.phase) {
+            BattlePhase.EVO -> {
+                if (battlePhaseTicks(session) >= 14) {
+                    beginEvolutionSequence()
+                }
+            }
+            BattlePhase.EVO_SEQUENCE -> {
+                if (battlePhaseTicks(session) >= 30) {
+                    completeEvolutionSequence()
+                }
+            }
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
+                if (!session.hitSoundPlayed && battlePhaseTicks(session) >= 47) {
+                    session.hitSoundPlayed = true
+                    playSound(DigiviceAudioManager.Cue.HIT)
+                    playSound(DigiviceAudioManager.Cue.SELECT)
+                }
+                if (battlePhaseTicks(session) >= 49) {
+                    completeAttackAnimation()
+                }
+            }
+            BattlePhase.FINISH -> {
+                if (battlePhaseTicks(session) >= 25) {
+                    finalizeBattleResult()
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    private fun maybeAdvanceRescueSequence() {
+        val rescue = rescueSession ?: return
+        if (screen != Screen.RESCUE) return
+        val ticks = rescuePhaseTicks(rescue)
+        when (rescue.phase) {
+            0 -> {
+                if (ticks >= 1) {
+                    advanceRescuePhase(rescue, 1)
+                }
+            }
+            1 -> {
+                if (ticks >= 1) {
+                    advanceRescuePhase(rescue, 2)
+                }
+            }
+            in 2..7 -> {
+                if (ticks >= 1) {
+                    rescue.visible = !rescue.visible
+                    advanceRescuePhase(rescue, rescue.phase + 1)
+                }
+            }
+            8 -> {
+                if (ticks >= 1) {
+                    advanceRescuePhase(rescue, 9)
+                }
+            }
+            in 9..16 -> {
+                if (ticks >= 1) {
+                    rescue.visible = !rescue.visible
+                    advanceRescuePhase(rescue, rescue.phase + 1)
+                }
+            }
+            in 17..19 -> {
+                if (ticks >= 1) {
+                    if (rescue.charge > 12) {
+                        rescue.visible = !rescue.visible
+                    }
+                    advanceRescuePhase(rescue, rescue.phase + 1)
+                }
+            }
+            20 -> {
+                if (ticks >= 1) {
+                    advanceRescuePhase(rescue, 21)
+                }
+            }
+            21 -> finishRescue(unlocked = rescue.charge > 12)
+        }
+    }
+
+    private fun maybeAdvanceFinishSequence() {
+        if (screen != Screen.FINISH_GAME) return
+        val now = System.currentTimeMillis()
+        if (finishNextAtMs == 0L || now < finishNextAtMs) return
+
+        when {
+            finishOffsetX >= -140 -> {
+                finishAnimFrame = 1 - finishAnimFrame
+                finishOffsetX -= 1
+                finishNextAtMs = now + 12L
+            }
+            finishOffsetX == -141 -> {
+                finishNextAtMs = now + 120L
+                finishOffsetX -= 1
+            }
+            finishOffsetX == -142 -> {
+                finishAnimFrame = 1 - finishAnimFrame
+                finishNextAtMs = now + 360L
+                finishOffsetX -= 1
+            }
+            else -> {
+                state.distance = 22000
+                state.defeat = false
+                state.area = MAP_DISTANCES.lastIndex
+                state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+                finishOffsetX = 32
+                finishAnimFrame = 0
+                finishNextAtMs = 0L
+                screen = Screen.IDLE
+                saveState()
+            }
+        }
+    }
+
+    private fun performStep() {
+        if (state.defeat || state.connectMode || state.battlePending) return
+        lastStepAtMs = System.currentTimeMillis()
+        state.steps = (state.steps + 1) % 1_000_000
+        if (state.distance > 0) {
+            state.distance -= 1
+        }
+        if (state.steps % 100 == 0 && state.dpower < 99) {
+            state.dpower += 1
+        }
+        state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+        if (state.distance == 0 || state.steps % 500 == 0) {
+            state.battlePending = true
+            battleSession = null
+            playSound(DigiviceAudioManager.Cue.SHAKE)
+            screen = Screen.BATTLE
+        }
+        saveState()
+    }
+
+    private fun ensureBattleSessionIfNeeded() {
+        if (screen != Screen.BATTLE || !state.battlePending || battleSession != null) return
+        val encounter = state.lastEncounter ?: calculateMilestone(state.distance, state.steps, state.dpower)
+        val boss = state.distance == 0 || encounter.type == "boss"
+        val enemyId = if (boss) {
+            BOSS_ENEMY_IDS[state.area.coerceIn(BOSS_ENEMY_IDS.indices)]
+        } else {
+            val pool = MAP_ENCOUNTERS[state.area.coerceIn(MAP_ENCOUNTERS.indices)]
+            pool[Random.nextInt(pool.size)]
+        }
+        val enemy = ENEMIES[enemyId]
+        battleSession = BattleSession(
+            enemyId = enemyId,
+            enemyName = enemy.name,
+            boss = boss,
+            mineHp = state.currentProfile().evolutions.first().hp,
+            enemyHp = enemy.hp,
+            swapIndex = nextSwappableIndex(state.currentChar)
+        )
+        playSound(DigiviceAudioManager.Cue.ENCOUNTER)
+        playSound(DigiviceAudioManager.Cue.ALERT_OLD)
+    }
+
+    private fun resolvePush() {
+        val session = battleSession ?: return
+        val chance = session.pushPress * 3
+        if (chance > Random.nextInt(0, 101)) {
+            startMineAttack()
+        } else {
+            startEnemyAttack()
+        }
+    }
+
+    private fun beginEvolutionSequence() {
+        val session = battleSession ?: return
+        session.evoSuccess = session.evoCharge * 10 > Random.nextInt(0, 101)
+        setBattlePhase(session, BattlePhase.EVO_SEQUENCE)
+    }
+
+    private fun commitSwap() {
+        val session = battleSession ?: return
+        state.currentChar = session.swapIndex
+        session.currentEvo = 0
+        session.mineHp = state.currentProfile().evolutions.first().hp
+        setBattlePhase(session, BattlePhase.PUSH)
+        session.pushPress = 0
+        saveState()
+    }
+
+    private fun resolveRun() {
+        val session = battleSession ?: return
+        state.battlePending = false
+        state.eventPending = false
+        session.escaped = true
+        if (!session.boss && Random.nextInt(0, 100) < 20) {
+            session.resultText = "ESC"
+            state.defeat = false
+        } else {
+            session.resultText = "FAIL"
+            state.distance += 500
+            state.dpower = (state.dpower - 2).coerceAtLeast(0)
+            state.defeat = Random.nextBoolean()
+        }
+        state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+        setBattlePhase(session, BattlePhase.FINISH)
+        saveState()
+    }
+
+    private fun startMineAttack() {
+        val session = battleSession ?: return
+        val nextEnemyHp = (session.enemyHp - currentMineAttack(session)).coerceAtLeast(0)
+        val nextTurn = session.turn + 1
+        session.pendingEnemyHp = nextEnemyHp
+        session.pendingTurn = nextTurn
+        session.resultText = if (shouldFinishBattle(session, nextTurn, session.mineHp, nextEnemyHp)) {
+            if (session.mineHp >= nextEnemyHp) "WIN" else "LOSE"
+        } else {
+            ""
+        }
+        setBattlePhase(session, BattlePhase.MINE_ATTACK)
+    }
+
+    private fun startEnemyAttack() {
+        val session = battleSession ?: return
+        val nextMineHp = (session.mineHp - currentEnemyAttack(session)).coerceAtLeast(0)
+        val nextTurn = session.turn + 1
+        session.pendingMineHp = nextMineHp
+        session.pendingTurn = nextTurn
+        session.resultText = if (shouldFinishBattle(session, nextTurn, nextMineHp, session.enemyHp)) {
+            if (nextMineHp >= session.enemyHp) "WIN" else "LOSE"
+        } else {
+            ""
+        }
+        setBattlePhase(session, BattlePhase.ENEMY_ATTACK)
+    }
+
+    private fun shouldFinishBattle(session: BattleSession, turn: Int = session.turn, mineHp: Int = session.mineHp, enemyHp: Int = session.enemyHp): Boolean {
+        val maxTurns = if (session.boss) 5 else 3
+        return turn >= maxTurns || mineHp == 0 || enemyHp == 0
+    }
+
+    private fun finalizeBattleResult() {
+        val session = battleSession ?: return
+        if (session.escaped) {
+            state.battlePending = false
+            battleSession = null
+            screen = Screen.IDLE
+            saveState()
+            return
+        }
+
+        state.battles += 1
+        state.battlePending = false
+        state.eventPending = false
+        val playerWon = session.resultText == "WIN"
+        if (playerWon) {
+            playSound(DigiviceAudioManager.Cue.HAPPY)
+            state.wins += 1
+            state.defeat = false
+            state.evoLevel = when {
+                state.wins >= 8 -> 2
+                state.wins >= 3 -> 1
+                else -> 0
+            }
+            if (session.boss) {
+                state.areas[state.area.coerceIn(state.areas.indices)] = 2
+                if (state.area == MAP_DISTANCES.lastIndex) {
+                    startFinishGameSequence()
+                } else {
+                    state.area = (state.area + 1).coerceAtMost(MAP_DISTANCES.lastIndex)
+                    state.distance = MAP_DISTANCES[state.area]
+                }
+            }
+        } else {
+            playSound(DigiviceAudioManager.Cue.SAD)
+            state.distance += 500
+            state.dpower = (state.dpower - 2).coerceAtLeast(0)
+            state.defeat = Random.nextBoolean()
+        }
+
+        state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+        battleSession = null
+
+        if (screen == Screen.FINISH_GAME) {
+            saveState()
+            return
+        }
+
+        if (playerWon && !session.boss && shouldStartRescue()) {
+            screen = Screen.RESCUE
+        } else {
+            screen = Screen.IDLE
+        }
+        saveState()
+    }
+
+    private fun completeEvolutionSequence() {
+        val session = battleSession ?: return
+        if (session.evoSuccess && session.currentEvo < 2) {
+            session.currentEvo += 1
+            session.mineHp = state.currentProfile().evolutions[session.currentEvo].hp
+        }
+        session.pushPress = 0
+        setBattlePhase(session, BattlePhase.PUSH)
+    }
+
+    private fun completeAttackAnimation() {
+        val session = battleSession ?: return
+        session.pendingMineHp?.let { session.mineHp = it }
+        session.pendingEnemyHp?.let { session.enemyHp = it }
+        session.pendingTurn?.let { session.turn = it }
+        session.pendingMineHp = null
+        session.pendingEnemyHp = null
+        session.pendingTurn = null
+        if (session.resultText.isNotEmpty()) {
+            setBattlePhase(session, BattlePhase.FINISH)
+        } else {
+            session.menuIndex = 0
+            session.resultText = ""
+            setBattlePhase(session, BattlePhase.MENU)
+        }
+    }
+
+    private fun shouldStartRescue(): Boolean {
+        if (state.unlockedChars.all { it }) return false
+        val lockedIndex = randomLockedCharIndex() ?: return false
+        return if (Random.nextInt(0, 100) < 10) {
+            rescueSession = RescueSession(
+                charIndex = lockedIndex,
+                phase = 0,
+                visible = true,
+                filter = 0,
+                phaseStartedAtMs = System.currentTimeMillis()
+            )
+            true
+        } else {
+            false
+        }
+    }
+
+    private fun resolveRescue() {
+        val rescue = rescueSession ?: return
+        if (rescue.phase == 8) {
+            rescue.charge = (rescue.charge + 2).coerceAtMost(20)
+            rescue.filter = when {
+                rescue.charge > 12 -> 2
+                rescue.charge > 6 -> 1
+                else -> 0
+            }
+        }
+    }
+
+    private fun finishRescue(unlocked: Boolean) {
+        val rescue = rescueSession
+        if (unlocked && rescue != null) {
+            state.unlockedChars[rescue.charIndex] = true
+            playSound(DigiviceAudioManager.Cue.START)
+            saveState()
+        } else {
+            playSound(DigiviceAudioManager.Cue.SAD_SMALL)
+        }
+        rescueSession = null
+        screen = Screen.IDLE
+    }
+
+    private fun advanceRescuePhase(rescue: RescueSession, phase: Int) {
+        rescue.phase = phase
+        rescue.phaseStartedAtMs = System.currentTimeMillis()
+        if (phase == 8) {
+            rescue.visible = true
+        }
+    }
+
+    private fun rescuePhaseTicks(rescue: RescueSession): Int {
+        val elapsedMs = (System.currentTimeMillis() - rescue.phaseStartedAtMs).coerceAtLeast(0L)
+        val tickMs = when (rescue.phase) {
+            0, 1, 20 -> 60L
+            in 2..7 -> 30L
+            8 -> 3000L
+            in 9..16 -> 12L
+            in 17..19 -> 30L
+            else -> 60L
+        }
+        return (elapsedMs / tickMs).toInt()
+    }
+
+    private fun canEvolveInBattle(session: BattleSession): Boolean {
+        if (session.currentEvo >= 2) return false
+        val required = evolutionCost(session.currentEvo)
+        return state.dpower >= required
+    }
+
+    private fun evolutionCost(currentEvo: Int): Int {
+        return when (currentEvo) {
+            0 -> 3
+            1 -> 6
+            else -> Int.MAX_VALUE
+        }
+    }
+
+    private fun hasSwappablePartyMember(): Boolean {
+        return state.unlockedChars.indices.any { it != state.currentChar && state.unlockedChars[it] }
+    }
+
+    private fun nextSwappableIndex(from: Int): Int {
+        if (!hasSwappablePartyMember()) return state.currentChar
+        for (offset in 1..state.unlockedChars.size) {
+            val candidate = (from + offset) % state.unlockedChars.size
+            if (candidate != state.currentChar && state.unlockedChars[candidate]) {
+                return candidate
+            }
+        }
+        return state.currentChar
+    }
+
+    private fun currentMineAttack(session: BattleSession): Int {
+        var attack = state.currentProfile().evolutions[session.currentEvo].attack
+        val char = state.currentChar
+        val area = state.area
+        if (((char == 3 || char == 5) && area == 2) ||
+            ((char == 1 || char == 4) && area == 3) ||
+            ((char == 6 || char == 7) && area == 4) ||
+            ((char == 0 || char == 2) && area == 5)
+        ) {
+            attack += 1
+        }
+        if (session.boss) {
+            attack -= 1
+        }
+        return attack.coerceAtLeast(1)
+    }
+
+    private fun currentEnemyAttack(session: BattleSession): Int {
+        return ENEMIES[session.enemyId].attack
+    }
+
+    private fun setBattlePhase(session: BattleSession, phase: BattlePhase) {
+        session.phase = phase
+        session.phaseStartedAtMs = System.currentTimeMillis()
+        session.hitSoundPlayed = false
+        if (phase != BattlePhase.MINE_ATTACK) {
+            session.pendingEnemyHp = null
+        }
+        if (phase != BattlePhase.ENEMY_ATTACK) {
+            session.pendingMineHp = null
+        }
+        if (phase != BattlePhase.MINE_ATTACK && phase != BattlePhase.ENEMY_ATTACK) {
+            session.pendingTurn = null
+        }
+        when (phase) {
+            BattlePhase.ALERT -> playSound(DigiviceAudioManager.Cue.ALERT_OLD)
+            BattlePhase.EVO -> playSound(DigiviceAudioManager.Cue.EVO_SMALL)
+            BattlePhase.EVO_SEQUENCE -> playSound(DigiviceAudioManager.Cue.EVO)
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> playSound(DigiviceAudioManager.Cue.READY_GO)
+            else -> Unit
+        }
+    }
+
+    private fun battlePhaseTicks(session: BattleSession): Int {
+        val elapsedMs = (System.currentTimeMillis() - session.phaseStartedAtMs).coerceAtLeast(0L)
+        val stepMs = when (session.phase) {
+            BattlePhase.EVO -> 120L
+            BattlePhase.EVO_SEQUENCE -> 70L
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> 50L
+            BattlePhase.FINISH -> 45L
+            else -> 100L
+        }
+        return (elapsedMs / stepMs).toInt()
+    }
+
+    private fun displayedMineHp(session: BattleSession, phaseTicks: Int): Int {
+        return if (session.phase == BattlePhase.ENEMY_ATTACK && phaseTicks >= 47) {
+            session.pendingMineHp ?: session.mineHp
+        } else {
+            session.mineHp
+        }
+    }
+
+    private fun displayedEnemyHp(session: BattleSession, phaseTicks: Int): Int {
+        return if (session.phase == BattlePhase.MINE_ATTACK && phaseTicks >= 47) {
+            session.pendingEnemyHp ?: session.enemyHp
+        } else {
+            session.enemyHp
+        }
+    }
+
+    private fun randomLockedCharIndex(): Int? {
+        val locked = state.unlockedChars.indices.filter { !state.unlockedChars[it] }
+        if (locked.isEmpty()) return null
+        return locked[Random.nextInt(locked.size)]
+    }
+
+    private fun finalizeBootSequence() {
+        state.currentChar = selectedChar.coerceIn(0, DigiviceV1State.DIGIMON_PROFILES.lastIndex)
+        state.unlockedChars[state.currentChar] = true
+        state.startSequencePending = false
+        state.defeat = false
+        state.distance = MAP_DISTANCES[state.area]
+        state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+        bootStage = 7
+        bootFrame = 0
+        bootVisible = true
+        bootNextAtMs = 0L
+        playSound(DigiviceAudioManager.Cue.HAPPY)
+        screen = if (state.battlePending) Screen.BATTLE else Screen.IDLE
+        saveState()
+    }
+
+    private fun startFinishGameSequence() {
+        finishOffsetX = 32
+        finishAnimFrame = 1
+        finishNextAtMs = System.currentTimeMillis() + 20L
+        playSound(DigiviceAudioManager.Cue.FINISH)
+        screen = Screen.FINISH_GAME
+    }
+
+    private fun resetBootSequence() {
+        bootStage = 0
+        bootFrame = 0
+        bootVisible = false
+        bootSlideX = 32
+        bootNextAtMs = System.currentTimeMillis() + 100L
+        selectedChar = state.currentChar
+    }
+
+    private fun resetProgress() {
+        state = DigiviceV1State().also {
+            it.lastEncounter = calculateMilestone(it.distance, it.steps, it.dpower)
+        }
+        selectedChar = state.currentChar
+        menuIndex = 0
+        statusPage = 0
+        statusMode = 0
+        statusDetailPage = 0
+        mapPreviewArea = state.area
+        finishOffsetX = 32
+        finishAnimFrame = 0
+        finishNextAtMs = 0L
+        resetBootSequence()
+        battleSession = null
+        rescueSession = null
+        screen = Screen.BOOT
+        saveState()
+    }
+
+    private fun playSound(cue: DigiviceAudioManager.Cue) {
+        audioManager.play(cue, state.soundEnabled)
+    }
+
+    private fun buildPhoneSnapshot(): PhoneVisualSnapshot {
+        val encounterType = state.lastEncounter?.type ?: "none"
+        return PhoneVisualSnapshot(
+            screen = screen.name,
+            currentChar = state.currentChar.coerceIn(BASE_SPRITES.indices),
+            selectedChar = selectedChar.coerceIn(BASE_SPRITES.indices),
+            menuIndex = menuIndex,
+            bootStage = bootStage,
+            bootFrame = bootFrame,
+            bootVisible = bootVisible,
+            bootSlideX = bootSlideX,
+            distance = state.distance,
+            steps = state.steps,
+            dpower = state.dpower,
+            wins = state.wins,
+            battles = state.battles,
+            area = state.area,
+            mapPreviewArea = mapPreviewArea,
+            mapBlinkVisible = currentMapBlinkVisible(),
+            mapTargetDistance = currentMapTargetDistance(),
+            completedAreas = state.areas.copyOf(),
+            finishOffset = finishOffsetX,
+            finishAnimFrame = finishAnimFrame,
+            statusPage = statusPage,
+            statusMode = statusMode,
+            statusDetailPage = statusDetailPage,
+            statusBarFrame = currentStatusBarFrame(),
+            autorun = state.autorun,
+            defeat = state.defeat,
+            battlePending = state.battlePending,
+            lastEncounterType = encounterType,
+            battle = battleSession?.let { session ->
+                val phaseTicks = battlePhaseTicks(session)
+                PhoneBattleSnapshot(
+                    enemyId = session.enemyId,
+                    enemyName = session.enemyName,
+                    boss = session.boss,
+                    mineHp = displayedMineHp(session, phaseTicks),
+                    enemyHp = displayedEnemyHp(session, phaseTicks),
+                    currentEvo = session.currentEvo,
+                    turn = session.pendingTurn ?: session.turn,
+                    phase = session.phase.name,
+                    phaseTicks = phaseTicks,
+                    menuIndex = session.menuIndex,
+                    pushPress = session.pushPress,
+                    evoCharge = session.evoCharge,
+                    swapIndex = session.swapIndex,
+                    evoSuccess = session.evoSuccess,
+                    resultText = session.resultText
+                )
+            },
+            rescue = rescueSession?.let { rescue ->
+                PhoneRescueSnapshot(
+                    charIndex = rescue.charIndex,
+                    charge = rescue.charge,
+                    phase = rescue.phase,
+                    visible = rescue.visible,
+                    filter = rescue.filter
+                )
+            }
+        )
+    }
+
+    private fun currentMapBlinkVisible(): Boolean {
+        return ((System.currentTimeMillis() / 500L) % 2L) == 0L
+    }
+
+    private fun currentMapTargetDistance(): Int {
+        return if (mapPreviewArea == state.area) state.distance else MAP_DISTANCES[mapPreviewArea.coerceIn(MAP_DISTANCES.indices)]
+    }
+
+    private fun isGameComplete(): Boolean {
+        return state.areas.all { it == 2 }
+    }
+
+    private fun currentStatusBarFrame(): Int {
+        val evolution = state.currentProfile().evolutions[statusDetailPage.coerceIn(0, 2)]
+        val frame = if (statusMode == 0) {
+            evolution.hp
+        } else {
+            var attack = evolution.attack
+            val char = state.currentChar
+            val area = state.area
+            if (((char == 3 || char == 5) && area == 2) ||
+                ((char == 1 || char == 4) && area == 3) ||
+                ((char == 6 || char == 7) && area == 4) ||
+                ((char == 0 || char == 2) && area == 5)
+            ) {
+                attack += 1
+            }
+            attack
+        }
+        return frame.coerceIn(0, 8)
+    }
+
+    private fun nextUnlockedChar(from: Int): Int {
+        for (offset in 1..state.unlockedChars.size) {
+            val candidate = (from + offset) % state.unlockedChars.size
+            if (state.unlockedChars[candidate]) {
+                return candidate
+            }
+        }
+        return from
+    }
+
+    private fun saveState() {
+        if (state.lastEncounter == null) {
+            state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+        }
+        saveRepository.save(state)
+    }
+
+    private fun calculateMilestone(distance: Int, steps: Int, dpower: Int): DigiviceEncounter {
+        val currentStepMod = steps % 500
+        val stepsToNext = if (currentStepMod == 0) 500 else 500 - currentStepMod
+        var nextSteps = steps + stepsToNext
+        var nextDistance = (distance - stepsToNext).coerceAtLeast(0)
+        var nextEnergy = (dpower + (stepsToNext / 100)).coerceAtMost(99)
+        var type = "battle"
+        if (distance <= stepsToNext) {
+            val stepsToZero = distance.coerceAtLeast(0)
+            nextDistance = 0
+            nextSteps = steps + stepsToZero
+            nextEnergy = (dpower + (stepsToZero / 100)).coerceAtMost(99)
+            type = "boss"
+            if (distance == 0) {
+                nextSteps = steps
+            }
+        }
+        return DigiviceEncounter(type = type, distance = nextDistance, steps = nextSteps, energy = nextEnergy)
+    }
+
+    private fun drawFrame() {
+        for (x in 0 until SIZE) {
+            setPixel(x, 0)
+            setPixel(x, SIZE - 1)
+        }
+        for (y in 0 until SIZE) {
+            setPixel(0, y)
+            setPixel(SIZE - 1, y)
+        }
+    }
+
+    private fun drawHeader() {
+        drawText("DV1", 2, 2)
+        drawTinyBars(15, 2, state.dpower.coerceIn(0, 99) / 20 + 1)
+    }
+
+    private fun drawBootScreen() {
+        val frame = if ((frameCounter / 10) % 2 == 0) "spr_start" else "spr_start_pop"
+        drawAssetSprite(frame, 2, 6, 21, 11)
+        drawText("AGO", 7, 18)
+    }
+
+    private fun drawSelectScreen() {
+        val profile = DigiviceV1State.DIGIMON_PROFILES[selectedChar]
+        drawText("PICK", 4, 6)
+        drawText(profile.shortCode, 4, 13)
+        drawAssetSprite(BASE_SPRITES[selectedChar], 15, 8, 9, 9)
+        drawText("${selectedChar + 1}", 18, 18)
+    }
+
+    private fun drawIdleScreen() {
+        val profile = state.currentProfile()
+        val encounter = state.lastEncounter ?: calculateMilestone(state.distance, state.steps, state.dpower)
+        drawText(profile.shortCode, 3, 6)
+        val spriteName = when {
+            state.defeat -> DEFEAT_SPRITES[state.currentChar]
+            state.autorun && (frameCounter / 8) % 2 == 1 -> STEP_SPRITES[state.currentChar]
+            else -> BASE_SPRITES[state.currentChar]
+        }
+        drawAssetSprite(spriteName, 14, 7, 10, 10, frameCounter / 8)
+        drawText(state.distance.coerceAtLeast(0).toString().padStart(4, '0').takeLast(4), 3, 13)
+        drawText("P${state.dpower.toString().padStart(2, '0')}", 3, 19)
+        val marker = when {
+            state.defeat -> "DMG"
+            state.battlePending -> "BAT"
+            encounter.type == "boss" -> "BOS"
+            else -> "GO"
+        }
+        drawText(marker, 14, 19)
+    }
+
+    private fun drawMenuScreen() {
+        drawText("MENU", 3, 6)
+        drawText(MENU_ITEMS[menuIndex], 5, 13)
+        drawText(if (state.autorun) "RUN" else "MAN", 5, 19)
+    }
+
+    private fun drawStatusScreen() {
+        val profile = state.currentProfile()
+        val evo = state.currentEvolution()
+        drawText(profile.shortCode, 3, 5)
+        drawText("L${evo.level}", 16, 5)
+        drawAssetSprite(EVOLUTION_SPRITES[state.currentChar][state.evoLevel.coerceIn(0, 2)], 14, 9, 10, 10, frameCounter / 12)
+        drawText("HP${evo.hp}", 3, 13)
+        drawText("AT${evo.attack}", 3, 19)
+    }
+
+    private fun drawMapScreen() {
+        drawText("AREA", 3, 6)
+        drawText("${mapPreviewArea + 1}", 10, 13)
+        for (index in MAP_DISTANCES.indices) {
+            val y = 20
+            val x = 3 + index * 3
+            if (index <= mapPreviewArea) {
+                setPixel(x, y)
+                setPixel(x + 1, y)
+            } else {
+                setPixel(x, y)
+            }
+        }
+    }
+
+    private fun drawBattleScreen() {
+        val session = battleSession ?: return
+        drawText(if (session.boss) "BOSS" else "BTTL", 2, 5)
+        when (session.phase) {
+            BattlePhase.ALERT -> {
+                drawAssetSprite("spr_battle_alert_digivice_v1", 2, 9, 20, 7)
+                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 9, 15, 8, 8, frameCounter / 10)
+            }
+            BattlePhase.MENU -> {
+                drawText(BATTLE_ITEMS[session.menuIndex], 2, 12)
+                drawText("M${session.mineHp}", 2, 19)
+                drawText("E${session.enemyHp}", 13, 19)
+                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 1, 8, 9, 9, frameCounter / 10)
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 14, 8, 10, 10, frameCounter / 10)
+            }
+            BattlePhase.PUSH -> {
+                drawText("PUSH", 2, 11)
+                drawText(session.pushPress.toString().padStart(2, '0'), 8, 18)
+                drawChargeBar(16, 18, session.pushPress / 4)
+                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 14, 8, 10, 10, frameCounter / 6)
+            }
+            BattlePhase.EVO -> {
+                drawText("EVO", 4, 11)
+                drawText(session.evoCharge.toString().padStart(2, '0'), 8, 18)
+                drawChargeBar(16, 18, session.evoCharge)
+                drawAssetSprite(EVOLUTION_SPRITES[state.currentChar][(session.currentEvo + 1).coerceAtMost(2)], 14, 8, 10, 10, frameCounter / 10)
+            }
+            BattlePhase.EVO_SEQUENCE -> {
+                drawAssetSprite("spr_evo_digivice_v1", 2, 8, 20, 10, battlePhaseTicks(session).coerceAtMost(11))
+            }
+            BattlePhase.SWAP -> {
+                drawText("SWAP", 2, 11)
+                drawText(DigiviceV1State.DIGIMON_PROFILES[session.swapIndex].shortCode, 4, 18)
+                drawAssetSprite(BASE_SPRITES[session.swapIndex], 15, 9, 10, 10, frameCounter / 10)
+            }
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
+                drawText("ATK", 4, 11)
+                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 2, 8, 10, 10, frameCounter / 8)
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 13, 8, 10, 10, frameCounter / 8)
+            }
+            BattlePhase.FINISH, BattlePhase.RESULT -> {
+                drawText(session.resultText, 3, 11)
+                drawText("M${session.mineHp}", 2, 19)
+                drawText("E${session.enemyHp}", 13, 19)
+                val resultSprite = if (session.resultText == "WIN") HAPPY_SPRITES[state.currentChar] else DEFEAT_SPRITES[state.currentChar]
+                drawAssetSprite(resultSprite, 15, 8, 10, 10, frameCounter / 10)
+            }
+        }
+    }
+
+    private fun drawRescueScreen() {
+        val rescue = rescueSession ?: return
+        val profile = DigiviceV1State.DIGIMON_PROFILES[rescue.charIndex]
+        drawText("SAVE", 2, 6)
+        drawText(profile.shortCode, 4, 12)
+        drawAssetSprite(BASE_SPRITES[rescue.charIndex], 15, 9, 10, 10, frameCounter / 10)
+        drawChargeBar(4, 20, rescue.charge)
+    }
+
+    private fun drawPhoneBoot(screenRect: RectF) {
+        drawPhoneAssetSprite("spr_start", screenRect.left.toInt() + 12, screenRect.top.toInt() + 12, 112, 40)
+        phoneCanvas.drawText("Press A to begin", screenRect.left + 18f, screenRect.bottom - 18f, phoneSmallTextPaint)
+    }
+
+    private fun drawPhoneSelect(screenRect: RectF) {
+        val profile = DigiviceV1State.DIGIMON_PROFILES[selectedChar]
+        phoneCanvas.drawText("SELECT PARTNER", screenRect.left + 14f, screenRect.top + 20f, phoneSmallTextPaint)
+        phoneCanvas.drawText(profile.name, screenRect.left + 14f, screenRect.top + 42f, phoneTextPaint)
+        drawPhoneAssetSprite(BASE_SPRITES[selectedChar], screenRect.left.toInt() + 84, screenRect.top.toInt() + 24, 40, 40, frameCounter / 10)
+        phoneCanvas.drawText("B: cycle", screenRect.left + 14f, screenRect.bottom - 28f, phoneSmallTextPaint)
+        phoneCanvas.drawText("A: confirm", screenRect.left + 14f, screenRect.bottom - 12f, phoneSmallTextPaint)
+    }
+
+    private fun drawPhoneIdle(screenRect: RectF) {
+        val encounter = state.lastEncounter ?: calculateMilestone(state.distance, state.steps, state.dpower)
+        val spriteName = when {
+            state.defeat -> DEFEAT_SPRITES[state.currentChar]
+            state.autorun && (frameCounter / 8) % 2 == 1 -> STEP_SPRITES[state.currentChar]
+            else -> BASE_SPRITES[state.currentChar]
+        }
+        drawPhoneAssetSprite(spriteName, screenRect.left.toInt() + 88, screenRect.top.toInt() + 20, 40, 40, frameCounter / 8)
+        phoneCanvas.drawText(state.currentProfile().name, screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
+        phoneCanvas.drawText("Distance ${state.distance}", screenRect.left + 14f, screenRect.top + 46f, phoneSmallTextPaint)
+        phoneCanvas.drawText("Steps ${state.steps}", screenRect.left + 14f, screenRect.top + 62f, phoneSmallTextPaint)
+        phoneCanvas.drawText("D-Power ${state.dpower}", screenRect.left + 14f, screenRect.top + 78f, phoneSmallTextPaint)
+        val label = when {
+            state.battlePending -> "Battle ready"
+            encounter.type == "boss" -> "Boss ahead"
+            state.autorun -> "Autorun active"
+            else -> "Walking"
+        }
+        phoneCanvas.drawText(label, screenRect.left + 14f, screenRect.bottom - 18f, phoneSmallTextPaint)
+    }
+
+    private fun drawPhoneMenu(screenRect: RectF) {
+        phoneCanvas.drawText("MENU", screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
+        for (index in MENU_ITEMS.indices) {
+            val prefix = if (index == menuIndex) "> " else "  "
+            phoneCanvas.drawText(prefix + MENU_ITEMS[index], screenRect.left + 14f, screenRect.top + 42f + (index * 16f), phoneSmallTextPaint)
+        }
+        phoneCanvas.drawText(if (state.autorun) "Autorun ON" else "Autorun OFF", screenRect.left + 14f, screenRect.bottom - 18f, phoneSmallTextPaint)
+    }
+
+    private fun drawPhoneStatus(screenRect: RectF) {
+        val evo = state.currentEvolution()
+        phoneCanvas.drawText(state.currentProfile().name, screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
+        phoneCanvas.drawText("Form ${evo.name}", screenRect.left + 14f, screenRect.top + 42f, phoneSmallTextPaint)
+        phoneCanvas.drawText("Level ${evo.level}", screenRect.left + 14f, screenRect.top + 58f, phoneSmallTextPaint)
+        phoneCanvas.drawText("HP ${evo.hp}", screenRect.left + 14f, screenRect.top + 74f, phoneSmallTextPaint)
+        phoneCanvas.drawText("ATK ${evo.attack}", screenRect.left + 14f, screenRect.top + 90f, phoneSmallTextPaint)
+        drawPhoneAssetSprite(EVOLUTION_SPRITES[state.currentChar][state.evoLevel.coerceIn(0, 2)], screenRect.left.toInt() + 88, screenRect.top.toInt() + 24, 40, 40, frameCounter / 10)
+    }
+
+    private fun drawPhoneMap(screenRect: RectF) {
+        phoneCanvas.drawText("MAP", screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
+        phoneCanvas.drawText("Area ${mapPreviewArea + 1}", screenRect.left + 14f, screenRect.top + 42f, phoneSmallTextPaint)
+        phoneCanvas.drawText("Distance ${MAP_DISTANCES[mapPreviewArea]}", screenRect.left + 14f, screenRect.top + 58f, phoneSmallTextPaint)
+        for (index in MAP_DISTANCES.indices) {
+            val x = screenRect.left + 16f + index * 16f
+            val y = screenRect.top + 86f
+            val active = index <= mapPreviewArea
+            if (active) {
+                phoneCanvas.drawCircle(x, y, 4f, phoneFramePaint.apply { style = Paint.Style.FILL })
+            } else {
+                phoneCanvas.drawCircle(x, y, 3f, phoneFramePaint.apply { style = Paint.Style.STROKE })
+            }
+        }
+        phoneFramePaint.style = Paint.Style.STROKE
+    }
+
+    private fun drawPhoneBattle(screenRect: RectF) {
+        val session = battleSession ?: return
+        phoneCanvas.drawText(if (session.boss) "BOSS BATTLE" else "BATTLE", screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
+        phoneCanvas.drawText(session.enemyName, screenRect.left + 14f, screenRect.top + 42f, phoneSmallTextPaint)
+        phoneCanvas.drawText("You ${session.mineHp}HP", screenRect.left + 14f, screenRect.top + 58f, phoneSmallTextPaint)
+        phoneCanvas.drawText("Enemy ${session.enemyHp}HP", screenRect.left + 14f, screenRect.top + 74f, phoneSmallTextPaint)
+        phoneCanvas.drawText("Turn ${session.turn + 1}", screenRect.left + 14f, screenRect.top + 90f, phoneSmallTextPaint)
+        drawPhoneAssetSprite(ATTACK_SPRITES[state.currentChar], screenRect.left.toInt() + 90, screenRect.top.toInt() + 18, 28, 28, frameCounter / 8)
+        drawPhoneAssetSprite(ENEMY_SPRITES[session.enemyId], screenRect.left.toInt() + 112, screenRect.top.toInt() + 18, 24, 24, frameCounter / 10)
+        val footer = when (session.phase) {
+            BattlePhase.ALERT -> "A to continue"
+            BattlePhase.MENU -> BATTLE_ITEMS[session.menuIndex]
+            BattlePhase.PUSH -> "Mash B ${session.pushPress}"
+            BattlePhase.EVO -> "Charge ${session.evoCharge}"
+            BattlePhase.EVO_SEQUENCE -> "EVOLVE"
+            BattlePhase.SWAP -> "Swap ${DigiviceV1State.DIGIMON_PROFILES[session.swapIndex].name}"
+            BattlePhase.MINE_ATTACK -> "ATTACK"
+            BattlePhase.ENEMY_ATTACK -> "DAMAGE"
+            BattlePhase.FINISH, BattlePhase.RESULT -> session.resultText
+        }
+        phoneCanvas.drawText(footer, screenRect.left + 14f, screenRect.bottom - 18f, phoneSmallTextPaint)
+    }
+
+    private fun drawPhoneRescue(screenRect: RectF) {
+        val rescue = rescueSession ?: return
+        val profile = DigiviceV1State.DIGIMON_PROFILES[rescue.charIndex]
+        phoneCanvas.drawText("RESCUE", screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
+        phoneCanvas.drawText(profile.name, screenRect.left + 14f, screenRect.top + 42f, phoneSmallTextPaint)
+        drawPhoneAssetSprite(BASE_SPRITES[rescue.charIndex], screenRect.left.toInt() + 88, screenRect.top.toInt() + 24, 40, 40, frameCounter / 10)
+        phoneCanvas.drawText("Mash B to save", screenRect.left + 14f, screenRect.top + 74f, phoneSmallTextPaint)
+        phoneCanvas.drawText("Charge ${rescue.charge}", screenRect.left + 14f, screenRect.top + 90f, phoneSmallTextPaint)
+        for (index in 0 until 10) {
+            val x = screenRect.left + 14f + index * 10f
+            val filled = index < rescue.charge.coerceAtMost(20) / 2
+            if (filled) {
+                phoneCanvas.drawRect(x, screenRect.bottom - 18f, x + 6f, screenRect.bottom - 10f, phoneFramePaint.apply { style = Paint.Style.FILL })
+            } else {
+                phoneCanvas.drawRect(x, screenRect.bottom - 18f, x + 6f, screenRect.bottom - 10f, phoneFramePaint.apply { style = Paint.Style.STROKE })
+            }
+        }
+        phoneFramePaint.style = Paint.Style.STROKE
+    }
+
+    private fun drawPulse(x: Int, y: Int) {
+        val radius = 1 + (frameCounter % 4)
+        for (dy in -radius..radius) {
+            for (dx in -radius..radius) {
+                if (dx * dx + dy * dy <= radius * radius) {
+                    setPixel(x + dx, y + dy)
+                }
+            }
+        }
+    }
+
+    private fun drawTinyBars(left: Int, top: Int, count: Int) {
+        for (i in 0 until count.coerceIn(0, 5)) {
+            setPixel(left + i * 2, top)
+            setPixel(left + i * 2, top + 1)
+        }
+    }
+
+    private fun drawChargeBar(left: Int, top: Int, count: Int) {
+        for (i in 0 until count.coerceIn(0, 10)) {
+            setPixel(left + i, top)
+            if (i % 2 == 0) {
+                setPixel(left + i, top - 1)
+            }
+        }
+    }
+
+    private fun drawSpriteForIndex(index: Int, left: Int, top: Int) {
+        val pattern = when (index % 4) {
+            0 -> listOf(
+                ".111.",
+                "11111",
+                "10101",
+                ".111.",
+                ".1.1."
+            )
+            1 -> listOf(
+                ".111.",
+                "11011",
+                "11111",
+                ".111.",
+                "1...1"
+            )
+            2 -> listOf(
+                ".111.",
+                "11111",
+                "01110",
+                ".111.",
+                "1.1.1"
+            )
+            else -> listOf(
+                "11111",
+                "10101",
+                "11111",
+                ".111.",
+                "..1.."
+            )
+        }
+        drawPattern(pattern, left, top)
+    }
+
+    private fun drawAssetSprite(name: String, left: Int, top: Int, maxWidth: Int, maxHeight: Int, frameIndex: Int = 0) {
+        val sprite = spriteLibrary.getFrame(name, frameIndex) ?: return
+        val srcWidth = sprite.width
+        val srcHeight = sprite.height
+        if (srcWidth <= 0 || srcHeight <= 0) return
+
+        val scale = minOf(
+            maxWidth.toFloat() / srcWidth.toFloat(),
+            maxHeight.toFloat() / srcHeight.toFloat(),
+            1f
+        )
+        val targetWidth = (srcWidth * scale).roundToInt().coerceAtLeast(1)
+        val targetHeight = (srcHeight * scale).roundToInt().coerceAtLeast(1)
+        val offsetX = left + ((maxWidth - targetWidth) / 2)
+        val offsetY = top + ((maxHeight - targetHeight) / 2)
+
+        for (y in 0 until targetHeight) {
+            val srcY = (y * srcHeight) / targetHeight
+            for (x in 0 until targetWidth) {
+                val srcX = (x * srcWidth) / targetWidth
+                val pixel = sprite.getPixel(srcX, srcY)
+                if (Color.alpha(pixel) > 32) {
+                    setPixel(offsetX + x, offsetY + y)
+                }
+            }
+        }
+    }
+
+    private fun drawPhoneAssetSprite(name: String, left: Int, top: Int, maxWidth: Int, maxHeight: Int, frameIndex: Int = 0) {
+        val sprite = spriteLibrary.getFrame(name, frameIndex) ?: return
+        val srcWidth = sprite.width
+        val srcHeight = sprite.height
+        if (srcWidth <= 0 || srcHeight <= 0) return
+
+        val scale = minOf(
+            maxWidth.toFloat() / srcWidth.toFloat(),
+            maxHeight.toFloat() / srcHeight.toFloat(),
+            1f
+        )
+        val targetWidth = (srcWidth * scale).roundToInt().coerceAtLeast(1)
+        val targetHeight = (srcHeight * scale).roundToInt().coerceAtLeast(1)
+        phoneSrcRect.set(0, 0, srcWidth, srcHeight)
+        phoneDstRect.set(left, top, left + targetWidth, top + targetHeight)
+        phoneCanvas.drawBitmap(sprite, phoneSrcRect, phoneDstRect, phoneSpritePaint)
+    }
+
+    private fun drawText(text: String, left: Int, top: Int) {
+        var x = left
+        text.uppercase().forEach { char ->
+            drawGlyphChar(char, x, top)
+            x += 4
+        }
+    }
+
+    private fun drawGlyphChar(char: Char, left: Int, top: Int) {
+        val pattern = FONT[char] ?: return
+        drawPattern(pattern, left, top)
+    }
+
+    private fun drawPattern(pattern: List<String>, left: Int, top: Int) {
+        for (row in pattern.indices) {
+            for (col in pattern[row].indices) {
+                if (pattern[row][col] != '.' && pattern[row][col] != '0') {
+                    setPixel(left + col, top + row)
+                }
+            }
+        }
+    }
+
+    private fun setPixel(x: Int, y: Int) {
+        if (x !in 0 until SIZE || y !in 0 until SIZE) return
+        pixels[y * SIZE + x] = ON
+    }
+}

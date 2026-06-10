@@ -1,0 +1,508 @@
+package com.digimon.digiviceglyph.runtime
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
+import kotlin.math.roundToInt
+
+data class PhoneBattleSnapshot(
+    val enemyId: Int,
+    val enemyName: String,
+    val boss: Boolean,
+    val mineHp: Int,
+    val enemyHp: Int,
+    val currentEvo: Int,
+    val turn: Int,
+    val phase: String,
+    val phaseTicks: Int,
+    val menuIndex: Int,
+    val pushPress: Int,
+    val evoCharge: Int,
+    val swapIndex: Int,
+    val evoSuccess: Boolean,
+    val resultText: String
+)
+
+data class PhoneRescueSnapshot(
+    val charIndex: Int,
+    val charge: Int,
+    val phase: Int,
+    val visible: Boolean,
+    val filter: Int
+)
+
+data class PhoneVisualSnapshot(
+    val screen: String,
+    val currentChar: Int,
+    val selectedChar: Int,
+    val menuIndex: Int,
+    val bootStage: Int,
+    val bootFrame: Int,
+    val bootVisible: Boolean,
+    val bootSlideX: Int,
+    val distance: Int,
+    val steps: Int,
+    val dpower: Int,
+    val wins: Int,
+    val battles: Int,
+    val area: Int,
+    val mapPreviewArea: Int,
+    val mapBlinkVisible: Boolean,
+    val mapTargetDistance: Int,
+    val completedAreas: IntArray,
+    val finishOffset: Int,
+    val finishAnimFrame: Int,
+    val statusPage: Int,
+    val statusMode: Int,
+    val statusDetailPage: Int,
+    val statusBarFrame: Int,
+    val autorun: Boolean,
+    val defeat: Boolean,
+    val battlePending: Boolean,
+    val lastEncounterType: String,
+    val battle: PhoneBattleSnapshot?,
+    val rescue: PhoneRescueSnapshot?
+)
+
+class ExactPhoneRenderer(
+    private val spriteLibrary: GlyphSpriteLibrary
+) {
+    companion object {
+        private const val PHONE_WIDTH = 160
+        private const val PHONE_HEIGHT = 160
+        private const val CONTENT_WIDTH = 32
+        private const val CONTENT_HEIGHT = 16
+
+        private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
+        private val ATTACK_SPRITES = arrayOf("spr_agu_attack", "spr_gabu_attack", "spr_biyo_attack", "spr_pal_attack", "spr_tento_attack", "spr_goma_attack", "spr_pata_attack", "spr_gato_attack")
+        private val HAPPY_SPRITES = arrayOf("spr_agu_happy", "spr_gabu_happy", "spr_biyo_happy", "spr_pal_happy", "spr_tento_happy", "spr_goma_happy", "spr_pata_happy", "spr_gato_happy")
+        private val DEFEAT_SPRITES = arrayOf("spr_agu_defeat", "spr_gabu_defeat", "spr_biyo_defeat", "spr_pal_defeat", "spr_tento_defeat", "spr_goma_defeat", "spr_pata_defeat", "spr_gato_defeat")
+        private val STEP_SPRITES = arrayOf("spr_agu_step", "spr_gabu_step", "spr_biyo_step", "spr_pal_step", "spr_tento_step", "spr_goma_step", "spr_pata_step", "spr_gato_step")
+        private val EVOLUTION_SPRITES = arrayOf(
+            arrayOf("spr_agu", "spr_grey", "spr_metalgrey"),
+            arrayOf("spr_gabu", "spr_garuru", "spr_weregaruru"),
+            arrayOf("spr_biyo", "spr_birdra", "spr_garuda"),
+            arrayOf("spr_pal", "spr_toge", "spr_lily"),
+            arrayOf("spr_tento", "spr_kabuteri", "spr_megakabuteri"),
+            arrayOf("spr_goma", "spr_ikaku", "spr_zudo"),
+            arrayOf("spr_pata", "spr_ange", "spr_magnaange"),
+            arrayOf("spr_gato", "spr_angewo_d", "spr_magnadra")
+        )
+        private val ENEMY_SPRITES = arrayOf(
+            "spr_scumon", "spr_numemon", "spr_shellmon", "spr_bakemon", "spr_picodevimon",
+            "spr_gazimon", "spr_hangyomon", "spr_anomalocarimon", "spr_tyranomon", "spr_phantomon",
+            "spr_megadramon_s", "spr_warumonzaemon", "spr_devimon_digivice", "spr_etemon",
+            "spr_myotismon", "spr_metalseadramon", "spr_puppetmon", "spr_mugendramon", "spr_piedmon"
+        )
+        private val MAP_POSITIONS = arrayOf(
+            intArrayOf(22, 4),
+            intArrayOf(22, 9),
+            intArrayOf(14, 9),
+            intArrayOf(7, 9),
+            intArrayOf(7, 4),
+            intArrayOf(13, 4),
+            intArrayOf(17, 4)
+        )
+    }
+
+    private val phoneBitmap = Bitmap.createBitmap(PHONE_WIDTH, PHONE_HEIGHT, Bitmap.Config.ARGB_8888)
+    private val phoneCanvas = Canvas(phoneBitmap)
+    private val contentBitmap = Bitmap.createBitmap(CONTENT_WIDTH, CONTENT_HEIGHT, Bitmap.Config.ARGB_8888)
+    private val contentCanvas = Canvas(contentBitmap)
+    private val shellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#0D1611")
+        style = Paint.Style.FILL
+    }
+    private val shellBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#5D865D")
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
+    private val lcdFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.FILL
+    }
+    private val lcdFramePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f
+    }
+    private val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#E7F1E4")
+        textSize = 10f
+        isFakeBoldText = true
+        textAlign = Paint.Align.CENTER
+    }
+    private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#D7E4D2")
+        textSize = 9f
+    }
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        isFilterBitmap = false
+        isDither = false
+    }
+    private val srcRect = Rect()
+    private val dstRect = Rect()
+
+    fun render(snapshot: PhoneVisualSnapshot, frameCounter: Int): Bitmap {
+        phoneCanvas.drawColor(Color.parseColor("#11161A"))
+
+        val shellRect = RectF(10f, 6f, 150f, 126f)
+        val lcdRect = RectF(18f, 18f, 142f, 94f)
+        phoneCanvas.drawRoundRect(shellRect, 12f, 12f, shellPaint)
+        phoneCanvas.drawRoundRect(shellRect, 12f, 12f, shellBorderPaint)
+        phoneCanvas.drawRoundRect(lcdRect, 6f, 6f, Paint(shellPaint).apply { color = Color.parseColor("#16231D") })
+
+        renderContent(snapshot, frameCounter)
+
+        srcRect.set(0, 0, CONTENT_WIDTH, CONTENT_HEIGHT)
+        dstRect.set(lcdRect.left.roundToInt(), lcdRect.top.roundToInt(), lcdRect.right.roundToInt(), lcdRect.bottom.roundToInt())
+        phoneCanvas.drawBitmap(contentBitmap, srcRect, dstRect, bitmapPaint)
+        phoneCanvas.drawRoundRect(lcdRect, 6f, 6f, shellBorderPaint)
+        phoneCanvas.drawText("DIGIVICE V1", PHONE_WIDTH / 2f, 110f, labelPaint)
+        phoneCanvas.drawText("A confirm   B advance   C back", 18f, 144f, hintPaint)
+        return phoneBitmap
+    }
+
+    fun renderContent(snapshot: PhoneVisualSnapshot, frameCounter: Int): Bitmap {
+        contentCanvas.drawColor(Color.WHITE)
+        when (snapshot.screen) {
+            "BOOT" -> drawBoot(snapshot, frameCounter)
+            "SELECT" -> drawSelect(snapshot)
+            "IDLE" -> drawIdle(snapshot, frameCounter)
+            "MENU" -> drawMenu(snapshot)
+            "STATUS" -> drawStatus(snapshot)
+            "STATUS_SELECT" -> drawStatusSelect(snapshot)
+            "STATUS_MENU" -> drawStatusMenu(snapshot)
+            "STATUS_DETAIL" -> drawStatusDetail(snapshot, frameCounter)
+            "MAP" -> drawMap(snapshot)
+            "MAP_CHANGE" -> drawMapChange(snapshot)
+            "FINISH_GAME" -> drawFinishGame(snapshot)
+            "BATTLE" -> drawBattle(snapshot, frameCounter)
+            "RESCUE" -> drawRescue(snapshot)
+        }
+        return contentBitmap
+    }
+
+    private fun drawBoot(snapshot: PhoneVisualSnapshot, frameCounter: Int) {
+        when (snapshot.bootStage) {
+            0 -> drawContentSprite("spr_start", 0, 0, snapshot.bootFrame)
+            1 -> drawContentSprite("spr_start_pop", 0, 0, snapshot.bootFrame)
+            2 -> {
+                if (snapshot.bootVisible) {
+                    drawContentSprite(BASE_SPRITES[snapshot.selectedChar], 8, 0, 1)
+                }
+            }
+            3 -> {
+                drawContentSprite("spr_status_digivice_v1", 0, 0)
+                drawContentSprite(BASE_SPRITES[snapshot.selectedChar], 8, 0, frameCounter / 8)
+            }
+            4 -> {
+                if (snapshot.bootVisible) {
+                    drawContentSprite(BASE_SPRITES[snapshot.currentChar], 8, 0, frameCounter / 8)
+                }
+            }
+            5 -> drawContentSprite(BASE_SPRITES[snapshot.currentChar], snapshot.bootSlideX, 0, frameCounter / 8)
+            else -> {
+                if (snapshot.bootVisible) {
+                    drawContentSprite(BASE_SPRITES[snapshot.currentChar], 8, 0, frameCounter / 8)
+                } else {
+                    drawContentSprite(HAPPY_SPRITES[snapshot.currentChar], 8, 0, frameCounter / 8)
+                    drawContentSprite("spr_happy", 24, 0)
+                }
+            }
+        }
+    }
+
+    private fun drawSelect(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_status_digivice_v1", 0, 0)
+        drawContentSprite(BASE_SPRITES[snapshot.selectedChar], 8, 0)
+    }
+
+    private fun drawIdle(snapshot: PhoneVisualSnapshot, frameCounter: Int) {
+        val spriteName = when {
+            snapshot.defeat -> DEFEAT_SPRITES[snapshot.currentChar]
+            snapshot.autorun && (frameCounter / 8) % 2 == 1 -> STEP_SPRITES[snapshot.currentChar]
+            else -> BASE_SPRITES[snapshot.currentChar]
+        }
+        drawContentSprite(spriteName, 8, 0, frameCounter / 8)
+        if (snapshot.defeat) {
+            drawContentSprite("spr_defeat", 24, 0)
+        } else if (snapshot.battlePending || snapshot.lastEncounterType == "boss") {
+            drawContentSprite("spr_happy", 24, 0)
+        }
+    }
+
+    private fun drawMenu(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_menu_digivice_v1", 0, 0, snapshot.menuIndex)
+    }
+
+    private fun drawStatus(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_menu_stats_digivice_v1", 0, 0)
+        when (snapshot.statusPage % 4) {
+            0 -> drawNumberSprite(snapshot.distance, 25, 8)
+            1 -> drawNumberSprite(snapshot.steps, 25, 8)
+            2 -> drawNumberSprite(snapshot.dpower, 21, 8)
+            3 -> {
+                drawNumberSprite(snapshot.wins, 5, 0)
+                drawNumberSprite(snapshot.battles, 26, 0)
+                val percentage = if (snapshot.battles > 0) ((snapshot.wins.toFloat() / snapshot.battles.toFloat()) * 100f).roundToInt() else 0
+                drawNumberSprite(percentage, 18, 8)
+            }
+        }
+    }
+
+    private fun drawStatusSelect(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_status_digivice_v1", 0, 0)
+        drawContentSprite(BASE_SPRITES[snapshot.currentChar], 8, 0)
+    }
+
+    private fun drawStatusMenu(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_menu_stats_digivice_v1", 0, 0, snapshot.statusMode)
+    }
+
+    private fun drawStatusDetail(snapshot: PhoneVisualSnapshot, frameCounter: Int) {
+        drawContentSprite("spr_hp_bar_digivice_v1", 0, 0, snapshot.statusBarFrame)
+        drawContentSprite(
+            EVOLUTION_SPRITES[snapshot.currentChar][snapshot.statusDetailPage.coerceIn(0, 2)],
+            8,
+            0,
+            frameCounter / 8
+        )
+    }
+
+    private fun drawMap(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_map__digivice_v1", 0, 0)
+        for (index in MAP_POSITIONS.indices) {
+            val pos = MAP_POSITIONS[index]
+            if (index == snapshot.mapPreviewArea) {
+                if (snapshot.mapBlinkVisible) {
+                    drawContentSprite("spr_map_cover", pos[0], pos[1], 1)
+                }
+            } else if (snapshot.completedAreas.getOrNull(index) == 2) {
+                drawContentSprite("spr_map_cover", pos[0], pos[1], 1)
+            }
+        }
+    }
+
+    private fun drawMapChange(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_map_change", 0, 0)
+        drawNumberSprite(snapshot.mapTargetDistance, 25, 8)
+    }
+
+    private fun drawFinishGame(snapshot: PhoneVisualSnapshot) {
+        if (snapshot.finishOffset > -141) {
+            val order = finishOrder(snapshot.currentChar)
+            order.forEachIndexed { index, charIndex ->
+                drawContentSprite(STEP_SPRITES[charIndex], snapshot.finishOffset + (index * 16), 0, snapshot.finishAnimFrame)
+            }
+        } else {
+            drawContentSprite("spr_end_digivice_v1", 0, 0, snapshot.finishAnimFrame)
+        }
+    }
+
+    private fun drawBattle(snapshot: PhoneVisualSnapshot, frameCounter: Int) {
+        val battle = snapshot.battle ?: return
+        when (battle.phase) {
+            "ALERT" -> {
+                if ((frameCounter / 5) % 2 == 0) {
+                    drawContentSprite("spr_battle_alert_digivice_v1", 0, 0)
+                }
+                drawContentSprite(ATTACK_SPRITES[snapshot.currentChar], 8, 0, frameCounter / 8)
+            }
+            "MENU" -> {
+                drawContentSprite("spr_battle_menu_digivice_v1", 0, 0, battle.menuIndex)
+            }
+            "PUSH" -> {
+                drawContentSprite("spr_battle_push_digivice_v1", 0, 0, (frameCounter / 6) % 2)
+            }
+            "EVO" -> {
+                drawContentSprite("spr_ready_go_d3_v1", 0, 0, (battle.phaseTicks / 5).coerceIn(0, 2))
+            }
+            "EVO_SEQUENCE" -> drawEvoSequence(snapshot, battle)
+            "SWAP" -> {
+                drawContentSprite("spr_battle_card", 0, 0)
+                drawContentSprite(ATTACK_SPRITES[battle.swapIndex], 8, 0, frameCounter / 8)
+            }
+            "MINE_ATTACK" -> drawMineAttack(snapshot, battle)
+            "ENEMY_ATTACK" -> drawEnemyAttack(snapshot, battle)
+            "FINISH", "RESULT" -> drawBattleFinish(snapshot, battle)
+        }
+    }
+
+    private fun drawRescue(snapshot: PhoneVisualSnapshot) {
+        val rescue = snapshot.rescue ?: return
+        when {
+            rescue.phase == 1 -> {
+                drawContentSprite("spr_evo_filter", 0, 0)
+            }
+            rescue.phase >= 1 -> {
+                if (rescue.phase in 17..19) {
+                    if (rescue.visible) {
+                        drawContentSprite(BASE_SPRITES[rescue.charIndex], 8, 0)
+                    } else {
+                        drawContentSprite(HAPPY_SPRITES[rescue.charIndex], 8, 0)
+                    }
+                } else if (rescue.visible) {
+                    drawContentSprite(BASE_SPRITES[rescue.charIndex], 8, 0)
+                }
+                drawContentSprite("spr_evo_filter_digivice_v1", 0, 0, rescue.filter.coerceIn(0, 2))
+            }
+            else -> {
+                drawContentSprite(BASE_SPRITES[rescue.charIndex], 8, 0)
+            }
+        }
+    }
+
+    private fun drawContentSprite(name: String, x: Int, y: Int, frameIndex: Int = 0) {
+        val sprite = spriteLibrary.getFrame(name, frameIndex) ?: return
+        contentCanvas.drawBitmap(sprite, x.toFloat(), y.toFloat(), bitmapPaint)
+    }
+
+    private fun drawEnemySprite(name: String, frameIndex: Int = 0) {
+        val sprite = spriteLibrary.getFrame(name, frameIndex) ?: return
+        val x = if (sprite.width == 24) 0f else 16f
+        val y = if (sprite.width == 24) 0f else 0f
+        contentCanvas.drawBitmap(sprite, x, y, bitmapPaint)
+    }
+
+    private fun drawMineAttack(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
+        val ticks = battle.phaseTicks
+        val currentSprite = if (battle.currentEvo == 0) ATTACK_SPRITES[snapshot.currentChar] else EVOLUTION_SPRITES[snapshot.currentChar][battle.currentEvo]
+        val currentX = if (battle.currentEvo == 0) 16 else 8
+        when {
+            ticks == 0 -> drawContentSprite(currentSprite, currentX, 0)
+            ticks in 1..17 -> {
+                drawContentSprite(currentSprite, currentX, 0)
+                val attackX = if (battle.currentEvo == 0) 8 - (ticks - 1) else -(ticks - 1)
+                drawContentSprite("spr_attack_digivice_v1", attackX, 0)
+                if (battle.currentEvo != 0) {
+                    drawContentSprite("spr_attack_digivice_v1", attackX, 8)
+                }
+            }
+            ticks in 18..34 -> {
+                drawEnemySprite(ENEMY_SPRITES[battle.enemyId])
+                drawContentSprite("spr_attack_digivice_v1", 32 - (ticks - 18), 0)
+            }
+            ticks in 35..45 -> {
+                val effect = if (battle.boss) "spr_attack_d3_v1" else "spr_attack_d3_v1_small"
+                drawContentSprite(effect, 0, 0, (ticks / 2) % 2)
+            }
+            else -> {
+                drawContentSprite("spr_hp_bar_digivice_v1", 0, 0, battle.enemyHp.coerceIn(0, 8))
+                drawEnemySprite(ENEMY_SPRITES[battle.enemyId])
+            }
+        }
+    }
+
+    private fun drawEnemyAttack(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
+        val ticks = battle.phaseTicks
+        val currentSprite = if (battle.currentEvo == 0) BASE_SPRITES[snapshot.currentChar] else EVOLUTION_SPRITES[snapshot.currentChar][battle.currentEvo]
+        val currentX = if (battle.currentEvo == 0) 16 else 8
+        when {
+            ticks == 0 -> drawEnemySprite(ENEMY_SPRITES[battle.enemyId], 1)
+            ticks in 1..17 -> {
+                drawEnemySprite(ENEMY_SPRITES[battle.enemyId], 1)
+                val projectileX = (if (battle.boss) 32 else 24) + (ticks - 1)
+                drawContentSpriteMirrored("spr_attack_digivice_v1", projectileX, 0)
+                if (battle.boss) {
+                    drawContentSpriteMirrored("spr_attack_digivice_v1", projectileX, 8)
+                }
+            }
+            ticks in 18..34 -> {
+                drawContentSprite(currentSprite, currentX, 0)
+                val projectileX = ticks - 18
+                drawContentSpriteMirrored("spr_attack_digivice_v1", projectileX, 0)
+                if (battle.currentEvo != 0) {
+                    drawContentSpriteMirrored("spr_attack_digivice_v1", projectileX, 8)
+                }
+            }
+            ticks in 35..45 -> {
+                val effect = if (battle.currentEvo != 0) "spr_attack_d3_v1" else "spr_attack_d3_v1_small"
+                val effectX = if (battle.currentEvo != 0) 8 else 16
+                drawContentSprite(effect, effectX, 0, (ticks / 2) % 2)
+            }
+            else -> {
+                drawContentSprite("spr_hp_bar_digivice_v1", 0, 0, battle.mineHp.coerceIn(0, 8))
+                drawContentSprite(currentSprite, currentX, 0)
+            }
+        }
+    }
+
+    private fun drawEvoSequence(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
+        val ticks = battle.phaseTicks
+        val currentSprite = EVOLUTION_SPRITES[snapshot.currentChar][battle.currentEvo.coerceIn(0, 2)]
+        val nextSprite = EVOLUTION_SPRITES[snapshot.currentChar][(battle.currentEvo + 1).coerceAtMost(2)]
+        val currentX = if (spriteWidth(currentSprite) > 16) 4 else 8
+        when {
+            ticks < 11 -> drawContentSprite("spr_evo_digivice_v1", 0, 0, ticks.coerceIn(0, 11))
+            ticks < 16 -> {
+                if (ticks % 2 == 0) {
+                    drawContentSprite(currentSprite, currentX, 0)
+                }
+            }
+            ticks < 19 -> {
+                drawContentSprite(currentSprite, currentX, 0)
+                drawContentSprite("spr_evo_filter", 0, 0)
+            }
+            ticks < 25 -> {
+                if (ticks % 2 == 0 && battle.evoSuccess) {
+                    drawContentSprite(nextSprite, 4, -8)
+                } else {
+                    drawContentSprite(currentSprite, currentX, 0)
+                }
+                drawContentSprite("spr_evo_filter", 0, 0)
+            }
+            else -> {
+                if (battle.evoSuccess) {
+                    val evoY = -8 + ((ticks - 25).coerceAtMost(2) * 4)
+                    drawContentSprite(nextSprite, 4, evoY)
+                } else {
+                    drawContentSprite(currentSprite, currentX, 0)
+                }
+            }
+        }
+    }
+
+    private fun drawBattleFinish(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
+        val slideX = 32 - battle.phaseTicks.coerceAtMost(24)
+        drawContentSprite(BASE_SPRITES[snapshot.currentChar], slideX, 0)
+    }
+
+    private fun drawNumberSprite(value: Int, x: Int, y: Int) {
+        val raw = value.coerceAtLeast(0).toString()
+        var drawX = x
+        for (ch in raw) {
+            val digit = ch.digitToIntOrNull() ?: continue
+            val sprite = spriteLibrary.getFrame("spr_numbers", digit) ?: continue
+            contentCanvas.drawBitmap(sprite, drawX.toFloat(), y.toFloat(), bitmapPaint)
+            drawX += sprite.width
+        }
+    }
+
+    private fun drawContentSpriteMirrored(name: String, x: Int, y: Int, frameIndex: Int = 0) {
+        val sprite = spriteLibrary.getFrame(name, frameIndex) ?: return
+        contentCanvas.save()
+        contentCanvas.translate((x + sprite.width).toFloat(), y.toFloat())
+        contentCanvas.scale(-1f, 1f)
+        contentCanvas.drawBitmap(sprite, 0f, 0f, bitmapPaint)
+        contentCanvas.restore()
+    }
+
+    private fun spriteWidth(name: String): Int {
+        return spriteLibrary.getFrame(name, 0)?.width ?: 16
+    }
+
+    private fun finishOrder(currentChar: Int): List<Int> {
+        val chars = mutableListOf(currentChar.coerceIn(BASE_SPRITES.indices))
+        for (index in BASE_SPRITES.indices) {
+            if (index != currentChar) {
+                chars += index
+            }
+        }
+        return chars
+    }
+}

@@ -1,0 +1,2 @@
+-keep class com.nothing.** { *; }
+-keep class com.digimon.digiviceglyph.DigiviceGlyphToyService { *; }
