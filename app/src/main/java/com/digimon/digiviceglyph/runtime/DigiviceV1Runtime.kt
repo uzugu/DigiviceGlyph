@@ -655,6 +655,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 setBattlePhase(session, BattlePhase.MENU)
             }
             BattlePhase.EVO -> Unit
+            BattlePhase.READY_GO -> Unit
             BattlePhase.SWAP -> {
                 playSound(DigiviceAudioManager.Cue.CANCEL)
                 setBattlePhase(session, BattlePhase.MENU)
@@ -874,17 +875,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             state.dpower += 1
         }
         state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
-        if (state.distance == 0) {
+        if (state.distance == 0 || state.steps % 500 == 0) {
             state.battlePending = true
             battleSession = null
             playSound(DigiviceAudioManager.Cue.SHAKE)
             screen = Screen.BATTLE
         }
         saveState()
-    }
-
-    fun triggerStep() {
-        performStep()
     }
 
     fun toggleAutorun() {
@@ -1665,6 +1662,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.MENU -> BATTLE_ITEMS[session.menuIndex]
             BattlePhase.PUSH -> "Mash B ${session.pushPress}"
             BattlePhase.EVO -> "Charge ${session.evoCharge}"
+            BattlePhase.READY_GO -> "READY ${session.evoCharge}"
             BattlePhase.EVO_SEQUENCE -> "EVOLVE"
             BattlePhase.SWAP -> "Swap ${DigiviceV1State.DIGIMON_PROFILES[session.swapIndex].name}"
             BattlePhase.MINE_ATTACK -> "ATTACK"
