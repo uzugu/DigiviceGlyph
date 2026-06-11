@@ -18,6 +18,8 @@
     <string name="button_c">C Stats / Next</string>
     <string name="autorun_toggle_off">Auto Walk Off</string>
     <string name="autorun_toggle_on">Auto Walk On</string>
+    <string name="sound_toggle_off">Sound Off</string>
+    <string name="sound_toggle_on">Sound On</string>
     <string name="open_settings">Open System Settings</string>
     <string name="control_notes">The phone view mirrors the same runtime used by the Glyph service. From idle, B opens the six-item menu, C opens the distance and step pager, pressing C again advances those pages, and vertical flicks count steps. Auto Walk is an app-only helper toggle and is not part of the Digivice menu flow.</string>
     <string name="preview_started">Preview service started</string>

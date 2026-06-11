@@ -1321,6 +1321,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     fun isAutorunEnabled(): Boolean = state.autorun
 
+    fun toggleSound() {
+        state.soundEnabled = !state.soundEnabled
+        saveState()
+    }
+
+    fun isSoundEnabled(): Boolean = state.soundEnabled
+
     override fun triggerStep() {
         performStep()
     }

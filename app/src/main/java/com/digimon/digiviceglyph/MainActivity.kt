@@ -29,6 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var portStatus: TextView
     private lateinit var previewView: GlyphPreviewView
     private lateinit var btnAutoRun: Button
+    private lateinit var btnSound: Button
     private lateinit var runtime: DigiviceV1Runtime
     private val previewHandler = Handler(Looper.getMainLooper())
     private val previewTicker = object : Runnable {
@@ -63,6 +64,7 @@ class MainActivity : AppCompatActivity() {
         val btnB = findViewById<Button>(R.id.btnB)
         val btnC = findViewById<Button>(R.id.btnC)
         btnAutoRun = findViewById(R.id.btnAutoRun)
+        btnSound = findViewById(R.id.btnSound)
 
         updateGlyphStatus()
 
@@ -98,7 +100,13 @@ class MainActivity : AppCompatActivity() {
             updateAutorunButton()
             previewView.setBitmap(runtime.renderPhoneFrame())
         }
+        btnSound.setOnClickListener {
+            runtime.toggleSound()
+            updateSoundButton()
+            previewView.setBitmap(runtime.renderPhoneFrame())
+        }
         updateAutorunButton()
+        updateSoundButton()
         previewView.setBitmap(runtime.renderPhoneFrame())
     }
 
@@ -139,6 +147,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateAutorunButton() {
         btnAutoRun.text = getString(
             if (runtime.isAutorunEnabled()) R.string.autorun_toggle_on else R.string.autorun_toggle_off
+        )
+    }
+
+    private fun updateSoundButton() {
+        btnSound.text = getString(
+            if (runtime.isSoundEnabled()) R.string.sound_toggle_on else R.string.sound_toggle_off
         )
     }
 

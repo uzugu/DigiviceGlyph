@@ -56,6 +56,7 @@ class DigiviceAudioManager(context: Context) {
 
         for (cue in Cue.values()) {
             runCatching {
+                Log.d(TAG, "Loading ${cue.assetName}...")
                 context.assets.openFd("audio/${cue.assetName}").use { fd ->
                     soundIds[cue] = soundPool.load(fd, 1)
                 }
@@ -63,19 +64,30 @@ class DigiviceAudioManager(context: Context) {
                 Log.w(TAG, "Failed to queue ${cue.assetName}", error)
             }
         }
+
+        Log.d(TAG, "All sounds queued. Loaded count=${loadedIds.size}/${soundIds.size}")
     }
 
     fun play(cue: Cue, enabled: Boolean) {
-        if (!enabled) return
-        val soundId = soundIds[cue] ?: return
+        if (!enabled) {
+            Log.d(TAG, "Sound disabled, skipping $cue")
+            return
+        }
+        val soundId = soundIds[cue] ?: run {
+            Log.d(TAG, "No soundId for $cue")
+            return
+        }
         if (soundId !in loadedIds) {
-            Log.d(TAG, "Skip $cue, sample not loaded yet")
+            Log.d(TAG, "Skip $cue, sample not loaded yet (loadedIds=${loadedIds.size})")
             return
         }
 
         val now = SystemClock.elapsedRealtime()
         val previous = lastPlayedAt[cue] ?: Long.MIN_VALUE
-        if (now - previous < cue.minGapMs) return
+        if (now - previous < cue.minGapMs) {
+            Log.d(TAG, "Skip $cue, cooldown (${now - previous}ms < ${cue.minGapMs}ms)")
+            return
+        }
 
         lastPlayedAt[cue] = now
         val streamId = soundPool.play(soundId, 1f, 1f, 1, 0, 1f)
