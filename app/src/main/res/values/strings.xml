@@ -16,8 +16,9 @@
     <string name="button_a">A Confirm</string>
     <string name="button_b">B Advance</string>
     <string name="button_c">C Back</string>
+    <string name="autorun_toggle">Auto Walk</string>
     <string name="open_settings">Open System Settings</string>
-    <string name="control_notes">The phone view mirrors the same runtime used by the Glyph service. Use A to confirm, B to step or advance, and C to back out. The motion and Glyph-button controls still work when the service is running.</string>
+    <string name="control_notes">The phone view mirrors the same runtime used by the Glyph service. Use A to confirm, B to step or advance, C to back out. Tap Auto Walk to toggle autorun (1 step/sec). The motion and Glyph-button controls still work when the service is running.</string>
     <string name="preview_started">Preview service started</string>
     <string name="notification_required">Notification permission is required to keep the preview service alive.</string>
     <string name="notification_channel_name">Digivice Glyph Preview</string>

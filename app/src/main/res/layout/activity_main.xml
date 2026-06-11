@@ -111,6 +111,13 @@
         </LinearLayout>
 
         <Button
+            android:id="@+id/btnAutoRun"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/autorun_toggle" />
+
+        <Button
             android:id="@+id/btnStartPreview"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

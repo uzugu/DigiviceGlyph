@@ -61,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         val btnA = findViewById<Button>(R.id.btnA)
         val btnB = findViewById<Button>(R.id.btnB)
         val btnC = findViewById<Button>(R.id.btnC)
+        val btnAutoRun = findViewById<Button>(R.id.btnAutoRun)
 
         updateGlyphStatus()
 
@@ -91,6 +92,10 @@ class MainActivity : AppCompatActivity() {
         bindRuntimeButton(btnA, GlyphButton.A)
         bindRuntimeButton(btnB, GlyphButton.B)
         bindRuntimeButton(btnC, GlyphButton.C)
+        btnAutoRun.setOnClickListener {
+            runtime.toggleAutorun()
+            previewView.setBitmap(runtime.renderPhoneFrame())
+        }
         previewView.setBitmap(runtime.renderPhoneFrame())
     }
 

@@ -90,7 +90,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         private const val PHONE_HEIGHT = 160
         private const val ON = Color.WHITE
         private const val OFF = Color.BLACK
-        private const val AUTORUN_STEP_INTERVAL_MS = 650L
+        private const val AUTORUN_STEP_INTERVAL_MS = 1000L
         private val MENU_ITEMS = listOf("STAT", "MAP", "GAME", "CTRL", "MED", "LINK")
         private val BATTLE_ITEMS = listOf("ATK", "EVO", "SWP", "RUN")
         private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
@@ -874,12 +874,21 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             state.dpower += 1
         }
         state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
-        if (state.distance == 0 || state.steps % 500 == 0) {
+        if (state.distance == 0) {
             state.battlePending = true
             battleSession = null
             playSound(DigiviceAudioManager.Cue.SHAKE)
             screen = Screen.BATTLE
         }
+        saveState()
+    }
+
+    fun triggerStep() {
+        performStep()
+    }
+
+    fun toggleAutorun() {
+        state.autorun = !state.autorun
         saveState()
     }
 
