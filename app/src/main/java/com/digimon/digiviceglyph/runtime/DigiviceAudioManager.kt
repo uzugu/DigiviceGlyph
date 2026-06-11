@@ -83,8 +83,8 @@ class DigiviceAudioManager(context: Context) {
         }
 
         val now = SystemClock.elapsedRealtime()
-        val previous = lastPlayedAt[cue] ?: Long.MIN_VALUE
-        if (now - previous < cue.minGapMs) {
+        val previous = lastPlayedAt[cue] ?: 0L
+        if (previous > 0 && now - previous < cue.minGapMs) {
             Log.d(TAG, "Skip $cue, cooldown (${now - previous}ms < ${cue.minGapMs}ms)")
             return
         }
