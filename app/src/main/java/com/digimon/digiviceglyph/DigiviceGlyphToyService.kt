@@ -175,7 +175,8 @@ class DigiviceGlyphToyService : Service() {
             override fun onServiceConnected(name: ComponentName?) {
                 Log.d(TAG, "Glyph service connected")
                 val targetDevice = Build.MODEL ?: "A024"
-                mgr.register(targetDevice)
+                val registered = mgr.register(targetDevice)
+                Log.d(TAG, "Glyph registration target=$targetDevice authorized=$registered")
                 val renderer = GlyphRenderer(this@DigiviceGlyphToyService)
                 renderer.init(mgr)
                 glyphRenderer = renderer

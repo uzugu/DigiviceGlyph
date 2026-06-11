@@ -3,25 +3,29 @@ package com.digimon.digiviceglyph
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.util.Log
 import com.nothing.ketchum.GlyphMatrixFrame
 import com.nothing.ketchum.GlyphMatrixManager
 import com.nothing.ketchum.GlyphMatrixObject
 
 class GlyphRenderer(private val context: Context) {
     companion object {
+        private const val TAG = "DigiviceGlyphRender"
         private const val MATRIX_SIZE = 25
         private const val LCD_WIDTH = 32
         private const val LCD_HEIGHT = 16
-        private const val FIT_WIDTH = LCD_WIDTH
-        private const val FIT_HEIGHT = LCD_HEIGHT
-        private const val FIT_X_OFFSET = 0
+        private const val H_CROP_LEFT = (LCD_WIDTH - MATRIX_SIZE) / 2
         private const val FIT_Y_OFFSET = MATRIX_SIZE - LCD_HEIGHT
         private const val LUMA_THRESHOLD = 140
+        private const val LOG_INTERVAL_FRAMES = 60
     }
 
     private var manager: GlyphMatrixManager? = null
     private var ready = false
-    private val matrixBitmap = Bitmap.createBitmap(LCD_WIDTH, MATRIX_SIZE, Bitmap.Config.ARGB_8888)
+    private val outputBitmaps = arrayOfNulls<Bitmap>(2)
+    private val outputPixels = IntArray(MATRIX_SIZE * MATRIX_SIZE)
+    private var outputBitmapIndex = 0
+    private var frameCount = 0
 
     fun init(mgr: GlyphMatrixManager) {
         manager = mgr
@@ -34,7 +38,7 @@ class GlyphRenderer(private val context: Context) {
         try {
             val matrixFrameBitmap = toMatrixBitmap(bitmap)
             val obj = GlyphMatrixObject.Builder()
-                .setImageSource(cropMatrixBitmap(matrixFrameBitmap))
+                .setImageSource(matrixFrameBitmap)
                 .setPosition(0, 0)
                 .setBrightness(4095)
                 .build()
@@ -43,12 +47,17 @@ class GlyphRenderer(private val context: Context) {
                 .addTop(obj)
                 .build(context)
 
-            mgr.setMatrixFrame(frame.render())
-        } catch (_: Exception) {
+            val payload = frame.render()
+            mgr.setMatrixFrame(payload)
+            logFrameSummary(payload)
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to push Glyph frame", error)
         }
     }
 
     private fun toMatrixBitmap(source: Bitmap): Bitmap {
+        outputPixels.fill(Color.BLACK)
+
         if (source.width == LCD_WIDTH && source.height == LCD_HEIGHT) {
             return mapLcdContentToMatrix(source)
         }
@@ -61,65 +70,90 @@ class GlyphRenderer(private val context: Context) {
                 val sampleX = ((x + 0.5f) * width / MATRIX_SIZE).toInt().coerceIn(0, width - 1)
                 val color = source.getPixel(sampleX, sampleY)
                 val luma = ((Color.red(color) * 299) + (Color.green(color) * 587) + (Color.blue(color) * 114)) / 1000
-                matrixBitmap.setPixel(
-                    x,
-                    y,
-                    if (luma < LUMA_THRESHOLD) Color.WHITE else Color.BLACK
-                )
+                if (luma < LUMA_THRESHOLD) {
+                    outputPixels[y * MATRIX_SIZE + x] = Color.WHITE
+                }
             }
         }
-        return matrixBitmap
+        return writeOutputBitmap()
     }
 
     private fun mapLcdContentToMatrix(source: Bitmap): Bitmap {
+        for (row in 0 until LCD_HEIGHT) {
+            val dstRow = row + FIT_Y_OFFSET
+            for (matrixCol in 0 until MATRIX_SIZE) {
+                val sourceCol = matrixCol + H_CROP_LEFT
+                val color = source.getPixel(sourceCol, row)
+                val luma = ((Color.red(color) * 299) + (Color.green(color) * 587) + (Color.blue(color) * 114)) / 1000
+                if (luma < LUMA_THRESHOLD) {
+                    outputPixels[dstRow * MATRIX_SIZE + matrixCol] = Color.WHITE
+                }
+            }
+        }
+
+        return writeOutputBitmap()
+    }
+
+    private fun writeOutputBitmap(): Bitmap {
+        val index = outputBitmapIndex
+        var bitmap = outputBitmaps[index]
+        if (bitmap == null || bitmap.isRecycled) {
+            bitmap = Bitmap.createBitmap(MATRIX_SIZE, MATRIX_SIZE, Bitmap.Config.ARGB_8888)
+            outputBitmaps[index] = bitmap
+        }
+        outputBitmapIndex = (index + 1) % outputBitmaps.size
+        bitmap.setPixels(outputPixels, 0, MATRIX_SIZE, 0, 0, MATRIX_SIZE, MATRIX_SIZE)
+        return bitmap
+    }
+
+    private fun logFrameSummary(payload: IntArray) {
+        frameCount++
+        if (frameCount != 1 && frameCount % LOG_INTERVAL_FRAMES != 0) return
+
+        var sourceLitCount = 0
+        var minX = MATRIX_SIZE
+        var maxX = -1
+        var minY = MATRIX_SIZE
+        var maxY = -1
         for (y in 0 until MATRIX_SIZE) {
             for (x in 0 until MATRIX_SIZE) {
-                matrixBitmap.setPixel(x, y, Color.BLACK)
+                if (outputPixels[y * MATRIX_SIZE + x] == Color.BLACK) continue
+                sourceLitCount++
+                minX = minOf(minX, x)
+                maxX = maxOf(maxX, x)
+                minY = minOf(minY, y)
+                maxY = maxOf(maxY, y)
             }
         }
-
-        val lit = Array(LCD_HEIGHT) { BooleanArray(LCD_WIDTH) }
-        for (y in 0 until LCD_HEIGHT) {
-            for (x in 0 until LCD_WIDTH) {
-                val color = source.getPixel(x, y)
-                val luma = ((Color.red(color) * 299) + (Color.green(color) * 587) + (Color.blue(color) * 114)) / 1000
-                lit[y][x] = luma < LUMA_THRESHOLD
-            }
+        var payloadLitCount = 0
+        var payloadMinX = MATRIX_SIZE
+        var payloadMaxX = -1
+        var payloadMinY = MATRIX_SIZE
+        var payloadMaxY = -1
+        for (index in payload.indices) {
+            if (payload[index] == 0) continue
+            val x = index % MATRIX_SIZE
+            val y = index / MATRIX_SIZE
+            payloadLitCount++
+            payloadMinX = minOf(payloadMinX, x)
+            payloadMaxX = maxOf(payloadMaxX, x)
+            payloadMinY = minOf(payloadMinY, y)
+            payloadMaxY = maxOf(payloadMaxY, y)
         }
-
-        for (row in 0 until LCD_HEIGHT) {
-            val dstRow = (row * FIT_HEIGHT / LCD_HEIGHT + FIT_Y_OFFSET).coerceIn(0, MATRIX_SIZE - 1)
-            for (lcdCol in 0 until LCD_WIDTH) {
-                val matrixCol = (lcdCol * FIT_WIDTH / LCD_WIDTH).coerceIn(0, FIT_WIDTH - 1)
-                var on = lit[row][lcdCol]
-                for (srcCol in (lcdCol + 1) until LCD_WIDTH) {
-                    if ((srcCol * FIT_WIDTH / LCD_WIDTH).coerceIn(0, FIT_WIDTH - 1) == matrixCol) {
-                        on = on || lit[row][srcCol]
-                    } else {
-                        break
-                    }
-                }
-                matrixBitmap.setPixel(
-                    FIT_X_OFFSET + matrixCol,
-                    dstRow,
-                    if (on) Color.WHITE else Color.BLACK
-                )
-            }
-        }
-
-        return matrixBitmap
+        Log.d(
+            TAG,
+            "frame=$frameCount sourceLit=$sourceLitCount sourceBounds=[$minX,$minY]-[$maxX,$maxY] " +
+                "payloadLit=$payloadLitCount payloadBounds=[$payloadMinX,$payloadMinY]-[$payloadMaxX,$payloadMaxY] " +
+                "cropLeft=$H_CROP_LEFT"
+        )
     }
 
     fun turnOff() {
         try {
             manager?.turnOff()
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            Log.e(TAG, "Failed to turn off Glyph matrix", error)
         }
-    }
-
-    private fun cropMatrixBitmap(source: Bitmap): Bitmap {
-        if (source.width <= MATRIX_SIZE) return source
-        return Bitmap.createBitmap(source, 0, 0, MATRIX_SIZE, MATRIX_SIZE)
     }
 
     fun release() {

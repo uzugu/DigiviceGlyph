@@ -62,10 +62,7 @@ class MainActivity : AppCompatActivity() {
         val btnB = findViewById<Button>(R.id.btnB)
         val btnC = findViewById<Button>(R.id.btnC)
 
-        deviceStatus.text = getString(
-            if (GlyphAvailability.isAvailable) R.string.device_status_available
-            else R.string.device_status_unavailable
-        )
+        updateGlyphStatus()
 
         portStatus.text = getString(R.string.port_status_text)
 
@@ -99,6 +96,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        updateGlyphStatus()
         previewHandler.removeCallbacks(previewTicker)
         previewHandler.post(previewTicker)
     }
@@ -109,11 +107,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startPreviewService() {
+        if (GlyphAvailability.isAvailable && !GlyphAvailability.isMasterGlyphEnabled(this)) {
+            Toast.makeText(this, R.string.device_status_master_disabled, Toast.LENGTH_LONG).show()
+        }
         val intent = Intent(this, DigiviceGlyphToyService::class.java).apply {
             action = DigiviceGlyphToyService.ACTION_START_PREVIEW
         }
         ContextCompat.startForegroundService(this, intent)
         Toast.makeText(this, R.string.preview_started, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun updateGlyphStatus() {
+        deviceStatus.text = getString(
+            when {
+                !GlyphAvailability.isAvailable -> R.string.device_status_unavailable
+                !GlyphAvailability.isMasterGlyphEnabled(this) -> R.string.device_status_master_disabled
+                else -> R.string.device_status_available
+            }
+        )
     }
 
     private fun bindRuntimeButton(button: Button, glyphButton: GlyphButton) {

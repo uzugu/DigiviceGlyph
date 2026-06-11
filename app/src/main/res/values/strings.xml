@@ -6,6 +6,7 @@
     <string name="app_subtitle">Separate Nothing Glyph app for porting the abandoned GameMaker Digivice Android build.</string>
     <string name="device_status_label">Glyph status</string>
     <string name="device_status_available">Nothing Glyph Matrix detected. Toy service can bind to Glyph hardware.</string>
+    <string name="device_status_master_disabled">Nothing Glyph Matrix detected, but the master Glyph switch is off. Enable Glyphs in system settings before starting the Digivice.</string>
     <string name="device_status_unavailable">Glyph Matrix not detected on this device. The app can still be built, but hardware output will not activate.</string>
     <string name="port_status_label">Port status</string>
     <string name="port_status_text">The first native runtime slice is live: Digivice V1 save data, step progression, 500-step encounter logic, starter selection, and a real stateful Glyph renderer are wired. Battle flow and sprite-faithful rendering still need more porting work.</string>
