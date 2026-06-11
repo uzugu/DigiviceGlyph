@@ -15,7 +15,7 @@ class GlyphRenderer(private val context: Context) {
         private const val LCD_WIDTH = 32
         private const val LCD_HEIGHT = 16
         private const val H_CROP_LEFT = (LCD_WIDTH - MATRIX_SIZE) / 2
-        private const val FIT_Y_OFFSET = MATRIX_SIZE - LCD_HEIGHT
+        private const val FIT_Y_OFFSET = (MATRIX_SIZE - LCD_HEIGHT) / 2
         private const val LUMA_THRESHOLD = 140
         private const val LOG_INTERVAL_FRAMES = 60
     }
