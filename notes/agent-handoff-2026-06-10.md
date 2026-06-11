@@ -2,6 +2,21 @@
 
 Date: 2026-06-10
 
+Update 2026-06-11:
+
+- Use root `AGENT_HANDOFF.md` as the current operational handoff.
+- This file remains useful as the broader project-history note, but it predates the verified Glyph SDK input findings and some later runtime changes.
+- Confirmed SDK constraint:
+  - short Glyph-button press is reserved by Nothing OS and is not reliable app input
+  - app input should be based on `EVENT_CHANGE` plus `EVENT_ACTION_DOWN` / `EVENT_ACTION_UP`
+- Confirmed global rear-output gate:
+  - `adb shell settings get global led_effect_enable`
+- Confirmed current control contract:
+  - Glyph Button hold or long press -> A
+  - flick right -> B
+  - flick left -> C
+  - vertical flick -> one walking step
+
 Project root:
 
 - `C:\Users\uzuik\AndroidStudioProjects\DigiviceGlyph`
@@ -46,6 +61,11 @@ Still not done:
 - the in-app phone preview is now driven by a dedicated exact renderer, but several screens are still partial
 - the Glyph Matrix view is adapted but still visually noisy on text-heavy screens
 - the runtime behavior is partially ported, but presentation fidelity is the main missing piece
+
+Important later correction:
+
+- the old placeholder-input assumptions are obsolete
+- current input work should start from `GlyphInputController.kt`, `FlickGestureDetector.kt`, and the root `AGENT_HANDOFF.md`
 
 ### Build / Deploy Status
 

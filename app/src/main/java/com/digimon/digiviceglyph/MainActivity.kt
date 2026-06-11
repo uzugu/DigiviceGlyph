@@ -28,6 +28,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var deviceStatus: TextView
     private lateinit var portStatus: TextView
     private lateinit var previewView: GlyphPreviewView
+    private lateinit var btnAutoRun: Button
     private lateinit var runtime: DigiviceV1Runtime
     private val previewHandler = Handler(Looper.getMainLooper())
     private val previewTicker = object : Runnable {
@@ -61,7 +62,7 @@ class MainActivity : AppCompatActivity() {
         val btnA = findViewById<Button>(R.id.btnA)
         val btnB = findViewById<Button>(R.id.btnB)
         val btnC = findViewById<Button>(R.id.btnC)
-        val btnAutoRun = findViewById<Button>(R.id.btnAutoRun)
+        btnAutoRun = findViewById(R.id.btnAutoRun)
 
         updateGlyphStatus()
 
@@ -94,14 +95,17 @@ class MainActivity : AppCompatActivity() {
         bindRuntimeButton(btnC, GlyphButton.C)
         btnAutoRun.setOnClickListener {
             runtime.toggleAutorun()
+            updateAutorunButton()
             previewView.setBitmap(runtime.renderPhoneFrame())
         }
+        updateAutorunButton()
         previewView.setBitmap(runtime.renderPhoneFrame())
     }
 
     override fun onResume() {
         super.onResume()
         updateGlyphStatus()
+        updateAutorunButton()
         previewHandler.removeCallbacks(previewTicker)
         previewHandler.post(previewTicker)
     }
@@ -129,6 +133,12 @@ class MainActivity : AppCompatActivity() {
                 !GlyphAvailability.isMasterGlyphEnabled(this) -> R.string.device_status_master_disabled
                 else -> R.string.device_status_available
             }
+        )
+    }
+
+    private fun updateAutorunButton() {
+        btnAutoRun.text = getString(
+            if (runtime.isAutorunEnabled()) R.string.autorun_toggle_on else R.string.autorun_toggle_off
         )
     }
 

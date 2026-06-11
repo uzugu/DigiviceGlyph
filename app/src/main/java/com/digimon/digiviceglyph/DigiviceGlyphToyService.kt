@@ -48,13 +48,15 @@ class DigiviceGlyphToyService : Service() {
         if (!GlyphAvailability.isAvailable) return@lazy null
         val handler = Handler(Looper.getMainLooper()) { msg ->
             val event = msg.data?.getString(com.nothing.ketchum.GlyphToy.MSG_GLYPH_TOY_DATA)
-            Log.d(TAG, "Toy message what=${msg.what}, event=$event")
+            Log.d(TAG, "Toy message what=${msg.what}, event=$event, binder=${msg.replyTo != null}")
             if (msg.what == com.nothing.ketchum.GlyphToy.MSG_GLYPH_TOY || event != null) {
                 handleToyMessage(msg)
             }
             true
         }
-        Messenger(handler)
+        Messenger(handler).also {
+            Log.d(TAG, "Messenger created, binder=${it.binder}")
+        }
     }
 
     override fun onCreate() {
@@ -121,12 +123,19 @@ class DigiviceGlyphToyService : Service() {
                 }
             }
             event == com.nothing.ketchum.GlyphToy.EVENT_ACTION_DOWN -> {
-                inputController?.onGlyphButtonDown()
+                Log.d(TAG, "Button DOWN")
+                ensureInputController()?.onGlyphButtonDown()
             }
             event == com.nothing.ketchum.GlyphToy.EVENT_ACTION_UP -> {
-                inputController?.onGlyphButtonUp()
+                Log.d(TAG, "Button UP")
+                ensureInputController()?.onGlyphButtonUp()
+            }
+            event == com.nothing.ketchum.GlyphToy.EVENT_CHANGE -> {
+                Log.d(TAG, "Button CHANGE")
+                ensureInputController()?.onGlyphButtonChange()
             }
             event == com.nothing.ketchum.GlyphToy.EVENT_AOD -> {
+                Log.d(TAG, "AOD event received")
                 pushStaticFrame()
             }
         }
@@ -143,6 +152,11 @@ class DigiviceGlyphToyService : Service() {
         mainHandler.removeCallbacks(frameRunnable)
         mainHandler.post(frameRunnable)
         pushLiveFrame()
+    }
+
+    private fun ensureInputController(): GlyphInputController? {
+        startRuntime()
+        return inputController
     }
 
     private fun stopRuntime() {
@@ -171,6 +185,7 @@ class DigiviceGlyphToyService : Service() {
         val mgr = com.nothing.ketchum.GlyphMatrixManager.getInstance(this)
         glyphManager = mgr
         safeGlyphManagerUninit("pre_init_cleanup")
+        Log.d(TAG, "initGlyphManager: messenger=${messenger != null}")
         mgr.init(object : com.nothing.ketchum.GlyphMatrixManager.Callback {
             override fun onServiceConnected(name: ComponentName?) {
                 Log.d(TAG, "Glyph service connected")

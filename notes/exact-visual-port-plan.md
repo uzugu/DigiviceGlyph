@@ -2,6 +2,13 @@
 
 Date: 2026-06-10
 
+Update 2026-06-11:
+
+- This document is still the right source-driven visual roadmap.
+- It does not cover the verified Glyph SDK input constraints; see root `AGENT_HANDOFF.md` for that.
+- Keep exact visual work focused on the in-app phone renderer.
+- The rear Glyph Matrix should stay an adapted secondary renderer even when the phone view becomes exact.
+
 ### Goal
 
 Recreate the original GameMaker `Digivice V1` visuals as closely as possible in the in-app phone preview.

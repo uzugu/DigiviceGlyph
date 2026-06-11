@@ -144,6 +144,48 @@ The following temporary artifacts were used during debugging:
 
 That decompiled `GlyphService.java` is worth re-checking if future debugging touches sessions, light ids, or firmware filtering.
 
+## Input contract verified 2026-06-11
+
+The authoritative control mapping is:
+
+- Glyph Button hold or long press -> A
+- flick right -> B
+- flick left -> C
+- vertical flick -> one walking step
+
+Idle-screen behavior was corrected after a control regression:
+
+- `B` from idle opens the main menu
+- `C` from idle opens the stats pages directly
+- `C` no longer toggles autorun
+- menu item `CTRL` no longer toggles autorun
+- Auto Walk remains available only through the app UI button
+
+Nothing's Glyph Toy API does not deliver an ordinary short press to the selected
+toy. A short press is reserved by Nothing OS for cycling the toy carousel.
+Supported app events are:
+
+- `EVENT_CHANGE` after enabling `com.nothing.glyph.toy.longpress=1`
+- `EVENT_ACTION_DOWN` and `EVENT_ACTION_UP` while the Glyph Button is held
+
+`DigiviceGlyphToyService` handles both forms. `GlyphInputController` combines
+them into one deduplicated A-button state, so overlapping `change` and
+down/up events cannot produce duplicate presses.
+
+Glyph Button events arrive through the `Messenger` returned by the toy
+service's `onBind()`. The standalone foreground service can keep gameplay and
+motion sensors alive, but it cannot receive Glyph Button events while this toy
+is not selected. This is an SDK/platform ownership rule, not an app bug.
+
+Horizontal and vertical motion detection now lives in
+`input/FlickGestureDetector.kt`. Do not restore the old A/B/C latch coupling or
+advance flick cooldown timestamps on every sensor event. Unit coverage is in
+`app/src/test/java/com/digimon/digiviceglyph/input/FlickGestureDetectorTest.kt`.
+
+Primary SDK reference:
+
+- https://github.com/Nothing-Developer-Programme/GlyphMatrix-Developer-Kit
+
 ## Suggested next work
 
 - Verify visually on the phone whether the rear Glyph now matches the successful firmware log state.

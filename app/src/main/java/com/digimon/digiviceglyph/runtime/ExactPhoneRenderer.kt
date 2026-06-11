@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
+import android.util.Log
 import kotlin.math.roundToInt
 
 data class PhoneBattleSnapshot(
@@ -32,6 +33,34 @@ data class PhoneRescueSnapshot(
     val phase: Int,
     val visible: Boolean,
     val filter: Int
+)
+
+data class PhoneSlotSnapshot(
+    val roll1: Int,
+    val roll2: Int,
+    val phase: String,
+    val stop1: Boolean,
+    val stop2: Boolean,
+    val counter1: Int,
+    val counter2: Int,
+    val animation: Boolean,
+    val resultDistance: Int,
+    val resultApplied: Boolean
+)
+
+data class PhoneCardSnapshot(
+    val roundIndex: Int,
+    val totalPointUnits: Int,
+    val roll1: Int,
+    val roll2: Int,
+    val press1: Boolean,
+    val press2: Boolean,
+    val counter: Int,
+    val phase: String,
+    val animation: Boolean,
+    val roundPointUnits: Int,
+    val resultDistance: Int,
+    val resultApplied: Boolean
 )
 
 data class PhoneVisualSnapshot(
@@ -63,6 +92,8 @@ data class PhoneVisualSnapshot(
     val defeat: Boolean,
     val battlePending: Boolean,
     val lastEncounterType: String,
+    val slot: PhoneSlotSnapshot?,
+    val card: PhoneCardSnapshot?,
     val battle: PhoneBattleSnapshot?,
     val rescue: PhoneRescueSnapshot?
 )
@@ -81,6 +112,43 @@ class ExactPhoneRenderer(
         private val HAPPY_SPRITES = arrayOf("spr_agu_happy", "spr_gabu_happy", "spr_biyo_happy", "spr_pal_happy", "spr_tento_happy", "spr_goma_happy", "spr_pata_happy", "spr_gato_happy")
         private val DEFEAT_SPRITES = arrayOf("spr_agu_defeat", "spr_gabu_defeat", "spr_biyo_defeat", "spr_pal_defeat", "spr_tento_defeat", "spr_goma_defeat", "spr_pata_defeat", "spr_gato_defeat")
         private val STEP_SPRITES = arrayOf("spr_agu_step", "spr_gabu_step", "spr_biyo_step", "spr_pal_step", "spr_tento_step", "spr_goma_step", "spr_pata_step", "spr_gato_step")
+        private val SLOT_SPRITES = arrayOf(
+            "spr_agu",
+            "spr_tyranomon",
+            "spr_picodevimon",
+            "spr_biyo",
+            "spr_gato",
+            "spr_scumon",
+            "spr_pal",
+            "spr_pata",
+            "spr_shellmon",
+            "spr_gabu",
+            "spr_bakemon",
+            "spr_numemon",
+            "spr_hangyomon",
+            "spr_tento",
+            "spr_gazimon",
+            "spr_goma"
+        )
+        private val CARD_IDS = intArrayOf(0, 1, 2, 3, 4, 5, 6, 7, -1, -1, -1, -1, -1, -1, -1, -1)
+        private val CARD_SPRITES = arrayOf(
+            "spr_agu",
+            "spr_gabu",
+            "spr_biyo",
+            "spr_pal",
+            "spr_tento",
+            "spr_goma",
+            "spr_pata",
+            "spr_gato",
+            "spr_tyranomon",
+            "spr_picodevimon",
+            "spr_scumon",
+            "spr_shellmon",
+            "spr_bakemon",
+            "spr_numemon",
+            "spr_hangyomon",
+            "spr_gazimon"
+        )
         private val EVOLUTION_SPRITES = arrayOf(
             arrayOf("spr_agu", "spr_grey", "spr_metalgrey"),
             arrayOf("spr_gabu", "spr_garuru", "spr_weregaruru"),
@@ -146,6 +214,9 @@ class ExactPhoneRenderer(
     }
     private val srcRect = Rect()
     private val dstRect = Rect()
+    private var lastLoggedScreen: String? = null
+    private var lastLoggedStatusPage = -1
+    private var lastLoggedStatusMode = -1
 
     fun render(snapshot: PhoneVisualSnapshot, frameCounter: Int): Bitmap {
         phoneCanvas.drawColor(Color.parseColor("#11161A"))
@@ -163,7 +234,7 @@ class ExactPhoneRenderer(
         phoneCanvas.drawBitmap(contentBitmap, srcRect, dstRect, bitmapPaint)
         phoneCanvas.drawRoundRect(lcdRect, 6f, 6f, shellBorderPaint)
         phoneCanvas.drawText("DIGIVICE V1", PHONE_WIDTH / 2f, 110f, labelPaint)
-        phoneCanvas.drawText("A confirm   B advance   C back", 18f, 144f, hintPaint)
+        phoneCanvas.drawText(hintText(snapshot), 18f, 144f, hintPaint)
         return phoneBitmap
     }
 
@@ -174,6 +245,10 @@ class ExactPhoneRenderer(
             "SELECT" -> drawSelect(snapshot)
             "IDLE" -> drawIdle(snapshot, frameCounter)
             "MENU" -> drawMenu(snapshot)
+            "SLOT" -> drawSlot(snapshot)
+            "SLOT_RESULT" -> drawSlotResult(snapshot)
+            "CARD" -> drawCard(snapshot)
+            "CARD_RESULT" -> drawCardResult(snapshot)
             "STATUS" -> drawStatus(snapshot)
             "STATUS_SELECT" -> drawStatusSelect(snapshot)
             "STATUS_MENU" -> drawStatusMenu(snapshot)
@@ -240,8 +315,52 @@ class ExactPhoneRenderer(
         drawContentSprite("spr_menu_digivice_v1", 0, 0, snapshot.menuIndex)
     }
 
+    private fun drawSlot(snapshot: PhoneVisualSnapshot) {
+        val slot = snapshot.slot ?: return
+        val frame = if (slot.animation) 1 else 0
+        drawContentSprite(SLOT_SPRITES[slot.roll1], 0, 0, frame)
+        drawContentSprite(SLOT_SPRITES[slot.roll2], 16, 0, frame)
+    }
+
+    private fun drawSlotResult(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_menu_stats", 0, 0, 0)
+        drawNumberSprite(snapshot.distance, 25, 8)
+    }
+
+    private fun drawCard(snapshot: PhoneVisualSnapshot) {
+        val card = snapshot.card ?: return
+        when (card.phase) {
+            "REVEAL" -> {
+                drawContentSprite("spr_card_digivice_v1", 0, 0, card.counter)
+                drawContentSprite("spr_card_digivice_v1", 16, 0, card.counter)
+            }
+            "CHOICE" -> {
+                drawContentSprite(CARD_SPRITES[card.roll1], 0, 0)
+                drawContentSprite(CARD_SPRITES[card.roll2], 16, 0)
+            }
+            "SCORE_DISPLAY" -> {
+                drawCardResultSprite(card.roll1, card.press1, 0, card.animation)
+                drawCardResultSprite(card.roll2, card.press2, 16, card.animation)
+            }
+        }
+    }
+
+    private fun drawCardResult(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite("spr_menu_stats", 0, 0, 0)
+        drawNumberSprite(snapshot.distance, 25, 8)
+    }
+
     private fun drawStatus(snapshot: PhoneVisualSnapshot) {
-        drawContentSprite("spr_menu_stats_digivice_v1", 0, 0)
+        if (lastLoggedScreen != "STATUS" || lastLoggedStatusPage != snapshot.statusPage) {
+            val sprite = spriteLibrary.getFrame("spr_menu_stats", snapshot.statusPage)
+            Log.d(
+                "ExactPhoneRenderer",
+                "drawStatus page=${snapshot.statusPage} sprite=spr_menu_stats size=${sprite?.width}x${sprite?.height}"
+            )
+            lastLoggedScreen = "STATUS"
+            lastLoggedStatusPage = snapshot.statusPage
+        }
+        drawContentSprite("spr_menu_stats", 0, 0, snapshot.statusPage)
         when (snapshot.statusPage % 4) {
             0 -> drawNumberSprite(snapshot.distance, 25, 8)
             1 -> drawNumberSprite(snapshot.steps, 25, 8)
@@ -261,6 +380,15 @@ class ExactPhoneRenderer(
     }
 
     private fun drawStatusMenu(snapshot: PhoneVisualSnapshot) {
+        if (lastLoggedScreen != "STATUS_MENU" || lastLoggedStatusMode != snapshot.statusMode) {
+            val sprite = spriteLibrary.getFrame("spr_menu_stats_digivice_v1", snapshot.statusMode)
+            Log.d(
+                "ExactPhoneRenderer",
+                "drawStatusMenu mode=${snapshot.statusMode} sprite=spr_menu_stats_digivice_v1 size=${sprite?.width}x${sprite?.height}"
+            )
+            lastLoggedScreen = "STATUS_MENU"
+            lastLoggedStatusMode = snapshot.statusMode
+        }
         drawContentSprite("spr_menu_stats_digivice_v1", 0, 0, snapshot.statusMode)
     }
 
@@ -360,6 +488,17 @@ class ExactPhoneRenderer(
     private fun drawContentSprite(name: String, x: Int, y: Int, frameIndex: Int = 0) {
         val sprite = spriteLibrary.getFrame(name, frameIndex) ?: return
         contentCanvas.drawBitmap(sprite, x.toFloat(), y.toFloat(), bitmapPaint)
+    }
+
+    private fun drawCardResultSprite(roll: Int, pressed: Boolean, x: Int, animation: Boolean) {
+        val cardId = CARD_IDS[roll]
+        when {
+            cardId == -1 && pressed -> drawContentSprite("spr_attack_d3_v1_small", x, 0, if (animation) 1 else 0)
+            cardId != -1 && pressed -> drawContentSprite(DEFEAT_SPRITES[cardId], x, 0)
+            cardId == -1 -> drawContentSprite(CARD_SPRITES[roll], x, 0, if (animation) 1 else 0)
+            animation -> drawContentSprite(BASE_SPRITES[cardId], x, 0)
+            else -> drawContentSprite(HAPPY_SPRITES[cardId], x, 0)
+        }
     }
 
     private fun drawEnemySprite(name: String, frameIndex: Int = 0) {
@@ -474,12 +613,12 @@ class ExactPhoneRenderer(
 
     private fun drawNumberSprite(value: Int, x: Int, y: Int) {
         val raw = value.coerceAtLeast(0).toString()
-        var drawX = x
-        for (ch in raw) {
-            val digit = ch.digitToIntOrNull() ?: continue
-            val sprite = spriteLibrary.getFrame("spr_numbers", digit) ?: continue
+        val spacing = 1
+        raw.reversed().forEachIndexed { index, ch ->
+            val digit = ch.digitToIntOrNull() ?: return@forEachIndexed
+            val sprite = spriteLibrary.getFrame("spr_numbers", digit) ?: return@forEachIndexed
+            val drawX = x - (index * (sprite.width + spacing))
             contentCanvas.drawBitmap(sprite, drawX.toFloat(), y.toFloat(), bitmapPaint)
-            drawX += sprite.width
         }
     }
 
@@ -504,5 +643,21 @@ class ExactPhoneRenderer(
             }
         }
         return chars
+    }
+
+    private fun hintText(snapshot: PhoneVisualSnapshot): String {
+        return when (snapshot.screen) {
+            "SLOT" -> "A/B spin-stop   C exit"
+            "SLOT_RESULT" -> if (snapshot.slot?.resultApplied == true) "A/B replay   C exit" else "wait for payout"
+            "CARD" -> when (snapshot.card?.phase) {
+                "CHOICE" -> "A left   B right   C exit"
+                "SCORE_DISPLAY" -> "watch result   C exit"
+                else -> "watch cards   C exit"
+            }
+            "CARD_RESULT" -> if (snapshot.card?.resultApplied == true) "A/B replay   C exit" else "wait for payout"
+            "STATUS" -> "A idle   B menu   C next"
+            "MENU" -> "A select   B next   C idle"
+            else -> "A action   B next   C back"
+        }
     }
 }

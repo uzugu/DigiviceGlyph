@@ -9,6 +9,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
 import android.graphics.Rect
 import android.graphics.RectF
+import android.util.Log
 import com.digimon.digiviceglyph.input.GlyphButton
 import com.digimon.digiviceglyph.input.GlyphButtonSink
 import kotlin.math.roundToInt
@@ -20,6 +21,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         SELECT,
         IDLE,
         MENU,
+        SLOT,
+        SLOT_RESULT,
+        CARD,
+        CARD_RESULT,
         STATUS,
         STATUS_SELECT,
         STATUS_MENU,
@@ -43,6 +48,20 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         ENEMY_ATTACK,
         FINISH,
         RESULT
+    }
+
+    private enum class SlotPhase {
+        READY,
+        SPINNING,
+        RESULT_WAIT,
+        RESULT_SCREEN
+    }
+
+    private enum class CardPhase {
+        REVEAL,
+        CHOICE,
+        SCORE_DISPLAY,
+        RESULT_SCREEN
     }
 
     private data class EnemyProfile(
@@ -84,6 +103,41 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var phaseStartedAtMs: Long = System.currentTimeMillis()
     )
 
+    private data class SlotSession(
+        var roll1: Int,
+        var roll2: Int,
+        var phase: SlotPhase = SlotPhase.READY,
+        var stop1: Boolean = false,
+        var stop2: Boolean = false,
+        var counter1: Int = 0,
+        var counter2: Int = 0,
+        var animation: Boolean = false,
+        var resultDistance: Int = 0,
+        var resultApplied: Boolean = false,
+        var nextReel1AtMs: Long = 0L,
+        var nextReel2AtMs: Long = 0L,
+        var nextAnimationAtMs: Long = 0L,
+        var nextPhaseAtMs: Long = 0L
+    )
+
+    private data class CardSession(
+        var roundIndex: Int,
+        var totalPointUnits: Int,
+        var roll1: Int,
+        var roll2: Int,
+        var press1: Boolean = false,
+        var press2: Boolean = false,
+        var animation: Boolean = false,
+        var counter: Int = 0,
+        var phase: CardPhase = CardPhase.REVEAL,
+        var roundPointUnits: Int = 0,
+        var resultDistance: Int = 0,
+        var resultApplied: Boolean = false,
+        var nextAdvanceAtMs: Long = 0L,
+        var nextAnimationAtMs: Long = 0L,
+        var nextPhaseAtMs: Long = 0L
+    )
+
     companion object {
         private const val SIZE = 25
         private const val PHONE_WIDTH = 160
@@ -91,7 +145,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         private const val ON = Color.WHITE
         private const val OFF = Color.BLACK
         private const val AUTORUN_STEP_INTERVAL_MS = 1000L
-        private val MENU_ITEMS = listOf("STAT", "MAP", "GAME", "CTRL", "MED", "LINK")
+        private const val SLOT_FAST_MS = 200L
+        private const val SLOT_SLOW_MS = 800L
+        private const val SLOT_RESULT_DELAY_MS = 8000L
+        private const val SLOT_BLINK_MS = 1000L
+        private const val RESULT_APPLY_DELAY_MS = 4000L
+        private const val CARD_REVEAL_TICK_MS = 667L
+        private const val CARD_DECISION_DELAY_MS = 4000L
+        private const val CARD_RESULT_DELAY_MS = 8000L
+        private const val CARD_BLINK_MS = 1000L
+        private val MENU_ITEMS = listOf("STATE", "MAP", "SLOT", "CARD", "MED", "VS")
         private val BATTLE_ITEMS = listOf("ATK", "EVO", "SWP", "RUN")
         private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
         private val ATTACK_SPRITES = arrayOf("spr_agu_attack", "spr_gabu_attack", "spr_biyo_attack", "spr_pal_attack", "spr_tento_attack", "spr_goma_attack", "spr_pata_attack", "spr_gato_attack")
@@ -109,6 +172,44 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             arrayOf("spr_gato", "spr_angewo_d", "spr_magnadra")
         )
         private val MAP_DISTANCES = intArrayOf(10000, 12000, 14000, 16000, 18000, 20000, 22000)
+        private val SLOT_POINTS = intArrayOf(1, -1, -1, 1, 1, -1, 1, 1, -1, 1, -1, -1, -1, 1, -1, 1)
+        private val SLOT_SPRITES = arrayOf(
+            "spr_agu",
+            "spr_tyranomon",
+            "spr_picodevimon",
+            "spr_biyo",
+            "spr_gato",
+            "spr_scumon",
+            "spr_pal",
+            "spr_pata",
+            "spr_shellmon",
+            "spr_gabu",
+            "spr_bakemon",
+            "spr_numemon",
+            "spr_hangyomon",
+            "spr_tento",
+            "spr_gazimon",
+            "spr_goma"
+        )
+        private val CARD_IDS = intArrayOf(0, 1, 2, 3, 4, 5, 6, 7, -1, -1, -1, -1, -1, -1, -1, -1)
+        private val CARD_SPRITES = arrayOf(
+            "spr_agu",
+            "spr_gabu",
+            "spr_biyo",
+            "spr_pal",
+            "spr_tento",
+            "spr_goma",
+            "spr_pata",
+            "spr_gato",
+            "spr_tyranomon",
+            "spr_picodevimon",
+            "spr_scumon",
+            "spr_shellmon",
+            "spr_bakemon",
+            "spr_numemon",
+            "spr_hangyomon",
+            "spr_gazimon"
+        )
         private val MAP_ENCOUNTERS = arrayOf(
             intArrayOf(0, 1, 2),
             intArrayOf(3, 0, 1),
@@ -196,6 +297,28 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             'X' to listOf("101", "101", "010", "101", "101"),
             'Y' to listOf("101", "101", "010", "010", "010")
         )
+
+        internal fun computeSlotResultDistance(leftValue: Int, rightValue: Int, sameRoll: Boolean): Int {
+            val resultPoints = when {
+                leftValue == 1 && rightValue == 1 -> if (sameRoll) 4 else 2
+                leftValue == -1 && rightValue == -1 -> if (sameRoll) -4 else -2
+                (leftValue == 2 && rightValue == -1) || (leftValue == -1 && rightValue == 2) -> -1
+                (leftValue == 2 && rightValue == 1) || (leftValue == 1 && rightValue == 2) -> 3
+                (leftValue == 1 && rightValue == 3) || (leftValue == 3 && rightValue == 1) -> 4
+                (leftValue == 3 && rightValue == -1) || (leftValue == -1 && rightValue == 3) -> -2
+                leftValue == 2 && rightValue == 2 -> 0
+                else -> 0
+            }
+            return resultPoints * 50
+        }
+
+        internal fun scoreCardSelection(isEnemyCard: Boolean, pressed: Boolean): Int {
+            return when {
+                isEnemyCard && pressed -> 1
+                !isEnemyCard && !pressed -> 1
+                else -> -1
+            }
+        }
     }
 
     private val pixels = IntArray(SIZE * SIZE)
@@ -241,6 +364,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private var statusPage = 0
     private var statusMode = 0
     private var statusDetailPage = 0
+    private var statusReturnScreen = Screen.MENU
     private var mapPreviewArea = state.area
     private var frameCounter = 0
     private var lastStepAtMs = 0L
@@ -256,10 +380,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private var finishNextAtMs = 0L
     private var battleSession: BattleSession? = null
     private var rescueSession: RescueSession? = null
+    private var slotSession: SlotSession? = null
+    private var cardSession: CardSession? = null
 
     override fun onButtonDown(button: GlyphButton) {
         lastActionLabel = button.name
         lastActionAtMs = System.currentTimeMillis()
+        Log.d(
+            "DigiviceV1Runtime",
+            "onButtonDown: button=$button screen=$screen menuIndex=$menuIndex statusPage=$statusPage statusMode=$statusMode statusDetailPage=$statusDetailPage"
+        )
         when (button) {
             GlyphButton.A -> handleConfirm()
             GlyphButton.B -> handleAdvance()
@@ -274,6 +404,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         frameCounter++
         maybeAutorun()
         maybeAdvanceBootSequence()
+        maybeAdvanceSlotGame()
+        maybeAdvanceCardGame()
         ensureBattleSessionIfNeeded()
         maybeAdvanceBattleAnimations()
         maybeAdvanceRescueSequence()
@@ -286,10 +418,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             Screen.SELECT -> drawSelectScreen()
             Screen.IDLE -> drawIdleScreen()
             Screen.MENU -> drawMenuScreen()
-            Screen.STATUS -> drawStatusScreen()
+            Screen.SLOT -> drawSlotScreen()
+            Screen.SLOT_RESULT -> drawSlotResultScreen()
+            Screen.CARD -> drawCardScreen()
+            Screen.CARD_RESULT -> drawCardResultScreen()
+            Screen.STATUS -> drawStatusPagerScreen()
             Screen.STATUS_SELECT -> drawSelectScreen()
-            Screen.STATUS_MENU -> drawStatusScreen()
-            Screen.STATUS_DETAIL -> drawStatusScreen()
+            Screen.STATUS_MENU -> drawStatusMenuScreen()
+            Screen.STATUS_DETAIL -> drawStatusDetailScreen()
             Screen.MAP -> drawMapScreen()
             Screen.MAP_CHANGE -> drawMapScreen()
             Screen.FINISH_GAME -> drawIdleScreen()
@@ -304,6 +440,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         frameCounter++
         maybeAutorun()
         maybeAdvanceBootSequence()
+        maybeAdvanceSlotGame()
+        maybeAdvanceCardGame()
         ensureBattleSessionIfNeeded()
         maybeAdvanceBattleAnimations()
         maybeAdvanceRescueSequence()
@@ -315,6 +453,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         frameCounter++
         maybeAutorun()
         maybeAdvanceBootSequence()
+        maybeAdvanceSlotGame()
+        maybeAdvanceCardGame()
         ensureBattleSessionIfNeeded()
         maybeAdvanceBattleAnimations()
         maybeAdvanceRescueSequence()
@@ -329,12 +469,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.START)
                 confirmStarterSelection()
             }
-            Screen.IDLE -> {
-                playSound(DigiviceAudioManager.Cue.SELECT)
-                screen = if (state.battlePending) Screen.BATTLE else Screen.MENU
-            }
+            Screen.IDLE -> Unit
             Screen.MENU -> handleMainMenuConfirm()
-            Screen.STATUS -> Unit
+            Screen.SLOT -> handleSlotConfirm()
+            Screen.SLOT_RESULT -> handleSlotResultConfirm()
+            Screen.CARD -> handleCardConfirm()
+            Screen.CARD_RESULT -> handleCardResultConfirm()
+            Screen.STATUS -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                screen = Screen.IDLE
+            }
             Screen.STATUS_SELECT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 statusMode = 0
@@ -364,9 +508,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             Screen.BATTLE -> handleBattleConfirm()
             Screen.RESCUE -> resolveRescue()
         }
+        logRuntimeState("afterConfirm")
     }
 
     private fun handleAdvance() {
+        Log.d(
+            "DigiviceV1Runtime",
+            "handleAdvance: screen=$screen menuIndex=$menuIndex statusPage=$statusPage statusMode=$statusMode statusDetailPage=$statusDetailPage"
+        )
         when (screen) {
             Screen.BOOT -> handleBootAdvance()
             Screen.SELECT -> {
@@ -375,15 +524,20 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             }
             Screen.IDLE -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
-                performStep()
+                screen = Screen.MENU
             }
             Screen.MENU -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 menuIndex = (menuIndex + 1) % MENU_ITEMS.size
+                Log.d("DigiviceV1Runtime", "menuIndex advanced to $menuIndex (${MENU_ITEMS[menuIndex]})")
             }
+            Screen.SLOT -> handleSlotAdvance()
+            Screen.SLOT_RESULT -> handleSlotResultAdvance()
+            Screen.CARD -> handleCardAdvance()
+            Screen.CARD_RESULT -> handleCardResultAdvance()
             Screen.STATUS -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
-                statusPage = (statusPage + 1) % 4
+                screen = Screen.MENU
             }
             Screen.STATUS_SELECT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
@@ -419,6 +573,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
         }
+        logRuntimeState("afterAdvance")
     }
 
     private fun handleBack() {
@@ -429,17 +584,22 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 screen = Screen.BOOT
             }
             Screen.IDLE -> {
-                state.autorun = !state.autorun
                 playSound(DigiviceAudioManager.Cue.SELECT)
-                saveState()
+                statusPage = 0
+                statusReturnScreen = Screen.IDLE
+                screen = Screen.STATUS
             }
             Screen.MENU -> {
                 playSound(DigiviceAudioManager.Cue.CANCEL)
                 screen = Screen.IDLE
             }
+            Screen.SLOT -> handleSlotBack()
+            Screen.SLOT_RESULT -> handleSlotResultBack()
+            Screen.CARD -> handleCardBack()
+            Screen.CARD_RESULT -> handleCardResultBack()
             Screen.STATUS -> {
-                playSound(DigiviceAudioManager.Cue.CANCEL)
-                screen = Screen.MENU
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                statusPage = (statusPage + 1) % 4
             }
             Screen.STATUS_SELECT -> {
                 playSound(DigiviceAudioManager.Cue.CANCEL)
@@ -465,6 +625,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             Screen.BATTLE -> handleBattleBack()
             Screen.RESCUE -> Unit
         }
+        logRuntimeState("afterBack")
     }
 
     private fun confirmStarterSelection() {
@@ -517,6 +678,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     private fun handleMainMenuConfirm() {
         playSound(DigiviceAudioManager.Cue.SELECT)
+        Log.d(
+            "DigiviceV1Runtime",
+            "handleMainMenuConfirm: menuIndex=$menuIndex item=${MENU_ITEMS[menuIndex]} defeat=${state.defeat}"
+        )
         when (menuIndex) {
             0 -> {
                 screen = Screen.STATUS_SELECT
@@ -525,14 +690,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 mapPreviewArea = state.area
                 screen = Screen.MAP
             }
-            2 -> {
-                statusPage = 0
-                screen = Screen.STATUS
-            }
-            3 -> {
-                state.autorun = !state.autorun
-                saveState()
-            }
+            2 -> startSlotGame()
+            3 -> startCardGame(resetProgress = true)
             4 -> {
                 if (state.defeat) {
                     state.defeat = false
@@ -541,6 +700,277 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 screen = Screen.IDLE
             }
             5 -> resetProgress()
+        }
+    }
+
+    private fun logRuntimeState(reason: String) {
+        Log.d(
+            "DigiviceV1Runtime",
+            "state[$reason]: screen=$screen menuIndex=$menuIndex item=${MENU_ITEMS.getOrNull(menuIndex)} statusPage=$statusPage statusMode=$statusMode statusDetailPage=$statusDetailPage char=${state.currentChar} steps=${state.steps} distance=${state.distance} dpower=${state.dpower}"
+        )
+    }
+
+    private fun startSlotGame() {
+        val now = System.currentTimeMillis()
+        slotSession = SlotSession(
+            roll1 = Random.nextInt(SLOT_SPRITES.size),
+            roll2 = Random.nextInt(SLOT_SPRITES.size),
+            nextAnimationAtMs = now + SLOT_BLINK_MS
+        )
+        cardSession = null
+        screen = Screen.SLOT
+    }
+
+    private fun startCardGame(resetProgress: Boolean) {
+        val now = System.currentTimeMillis()
+        val totalPointUnits = if (resetProgress) 0 else (cardSession?.totalPointUnits ?: 0)
+        val roundIndex = if (resetProgress) 0 else (cardSession?.roundIndex ?: 0)
+        cardSession = CardSession(
+            roundIndex = roundIndex,
+            totalPointUnits = totalPointUnits,
+            roll1 = Random.nextInt(CARD_SPRITES.size),
+            roll2 = Random.nextInt(CARD_SPRITES.size),
+            nextAdvanceAtMs = now + CARD_REVEAL_TICK_MS
+        )
+        slotSession = null
+        screen = Screen.CARD
+    }
+
+    private fun handleSlotConfirm() {
+        val session = slotSession ?: return
+        playSound(DigiviceAudioManager.Cue.SELECT)
+        when (session.phase) {
+            SlotPhase.READY -> {
+                session.phase = SlotPhase.SPINNING
+                val now = System.currentTimeMillis()
+                session.nextReel1AtMs = now + SLOT_FAST_MS
+                session.nextReel2AtMs = now + SLOT_FAST_MS
+            }
+            SlotPhase.SPINNING -> {
+                if (!session.stop1) {
+                    session.stop1 = true
+                } else if (!session.stop2) {
+                    session.stop2 = true
+                }
+            }
+            SlotPhase.RESULT_WAIT, SlotPhase.RESULT_SCREEN -> Unit
+        }
+    }
+
+    private fun handleSlotAdvance() = handleSlotConfirm()
+
+    private fun handleSlotBack() {
+        playSound(DigiviceAudioManager.Cue.CANCEL)
+        menuIndex = 2
+        slotSession = null
+        screen = Screen.MENU
+    }
+
+    private fun handleSlotResultConfirm() {
+        val session = slotSession ?: return
+        if (!session.resultApplied) return
+        playSound(DigiviceAudioManager.Cue.SELECT)
+        startSlotGame()
+    }
+
+    private fun handleSlotResultAdvance() = handleSlotResultConfirm()
+
+    private fun handleSlotResultBack() {
+        playSound(DigiviceAudioManager.Cue.CANCEL)
+        menuIndex = 2
+        slotSession = null
+        screen = Screen.MENU
+    }
+
+    private fun handleCardConfirm() {
+        val session = cardSession ?: return
+        if (session.phase != CardPhase.CHOICE) return
+        playSound(DigiviceAudioManager.Cue.SELECT)
+        session.press1 = true
+    }
+
+    private fun handleCardAdvance() {
+        val session = cardSession ?: return
+        if (session.phase != CardPhase.CHOICE) return
+        playSound(DigiviceAudioManager.Cue.SELECT)
+        session.press2 = true
+    }
+
+    private fun handleCardBack() {
+        playSound(DigiviceAudioManager.Cue.CANCEL)
+        menuIndex = 3
+        cardSession = null
+        screen = Screen.MENU
+    }
+
+    private fun handleCardResultConfirm() {
+        val session = cardSession ?: return
+        if (!session.resultApplied) return
+        playSound(DigiviceAudioManager.Cue.SELECT)
+        startCardGame(resetProgress = true)
+    }
+
+    private fun handleCardResultAdvance() = handleCardResultConfirm()
+
+    private fun handleCardResultBack() {
+        playSound(DigiviceAudioManager.Cue.CANCEL)
+        menuIndex = 3
+        cardSession = null
+        screen = Screen.MENU
+    }
+
+    private fun maybeAdvanceSlotGame() {
+        val session = slotSession ?: return
+        val now = System.currentTimeMillis()
+        when (session.phase) {
+            SlotPhase.READY -> Unit
+            SlotPhase.SPINNING -> {
+                if (session.nextReel1AtMs != 0L && now >= session.nextReel1AtMs && session.counter1 < 3) {
+                    session.roll1 = (session.roll1 + 1) % SLOT_SPRITES.size
+                    if (session.stop1) {
+                        session.counter1 += 1
+                        session.nextReel1AtMs = if (session.counter1 >= 3) 0L else now + SLOT_SLOW_MS
+                    } else {
+                        session.nextReel1AtMs = now + SLOT_FAST_MS
+                    }
+                }
+                if (session.nextReel2AtMs != 0L && now >= session.nextReel2AtMs && session.counter2 < 3) {
+                    session.roll2 = (session.roll2 + 1) % SLOT_SPRITES.size
+                    if (session.stop2) {
+                        session.counter2 += 1
+                        session.nextReel2AtMs = if (session.counter2 >= 3) 0L else now + SLOT_SLOW_MS
+                        playSound(DigiviceAudioManager.Cue.SELECT)
+                    } else {
+                        session.nextReel2AtMs = now + SLOT_FAST_MS
+                    }
+                }
+                if (session.counter1 == 3 && session.counter2 == 3) {
+                    session.resultDistance = computeSlotResultDistance(
+                        SLOT_POINTS[session.roll1],
+                        SLOT_POINTS[session.roll2],
+                        session.roll1 == session.roll2
+                    )
+                    session.phase = SlotPhase.RESULT_WAIT
+                    session.nextAnimationAtMs = now + SLOT_BLINK_MS
+                    session.nextPhaseAtMs = now + SLOT_RESULT_DELAY_MS
+                    playResultCue(session.resultDistance)
+                }
+            }
+            SlotPhase.RESULT_WAIT -> {
+                if (now >= session.nextAnimationAtMs) {
+                    session.animation = !session.animation
+                    session.nextAnimationAtMs = now + SLOT_BLINK_MS
+                }
+                if (now >= session.nextPhaseAtMs) {
+                    session.phase = SlotPhase.RESULT_SCREEN
+                    session.nextPhaseAtMs = now + RESULT_APPLY_DELAY_MS
+                    session.nextAnimationAtMs = 0L
+                    screen = Screen.SLOT_RESULT
+                    Log.d("DigiviceV1Runtime", "slot result pending distance=${session.resultDistance}")
+                }
+            }
+            SlotPhase.RESULT_SCREEN -> {
+                if (!session.resultApplied && now >= session.nextPhaseAtMs) {
+                    applyDistanceReward(session.resultDistance)
+                    session.resultApplied = true
+                    playSound(DigiviceAudioManager.Cue.SELECT)
+                    Log.d("DigiviceV1Runtime", "slot result applied distance=${session.resultDistance} current=${state.distance}")
+                }
+            }
+        }
+    }
+
+    private fun maybeAdvanceCardGame() {
+        val session = cardSession ?: return
+        val now = System.currentTimeMillis()
+        when (session.phase) {
+            CardPhase.REVEAL -> {
+                if (now >= session.nextAdvanceAtMs) {
+                    if (session.counter < 16) {
+                        session.counter += 1
+                        session.nextAdvanceAtMs = now + CARD_REVEAL_TICK_MS
+                    } else {
+                        session.phase = CardPhase.CHOICE
+                        session.nextPhaseAtMs = now + CARD_DECISION_DELAY_MS
+                    }
+                }
+            }
+            CardPhase.CHOICE -> {
+                if (now >= session.nextPhaseAtMs) {
+                    session.phase = CardPhase.SCORE_DISPLAY
+                    session.counter = 17
+                    session.roundPointUnits = computeCardRoundPointUnits(session)
+                    session.nextPhaseAtMs = now + CARD_RESULT_DELAY_MS
+                    session.nextAnimationAtMs = now + CARD_BLINK_MS
+                    playResultCue(session.roundPointUnits * 25)
+                    Log.d(
+                        "DigiviceV1Runtime",
+                        "card round scored round=${session.roundIndex} units=${session.roundPointUnits} press1=${session.press1} press2=${session.press2}"
+                    )
+                }
+            }
+            CardPhase.SCORE_DISPLAY -> {
+                if (now >= session.nextAnimationAtMs) {
+                    session.animation = !session.animation
+                    session.nextAnimationAtMs = now + CARD_BLINK_MS
+                }
+                if (now >= session.nextPhaseAtMs) {
+                    session.totalPointUnits += session.roundPointUnits
+                    if (session.roundIndex >= 3) {
+                        session.phase = CardPhase.RESULT_SCREEN
+                        session.resultDistance = session.totalPointUnits * 25
+                        session.nextPhaseAtMs = now + RESULT_APPLY_DELAY_MS
+                        screen = Screen.CARD_RESULT
+                        Log.d(
+                            "DigiviceV1Runtime",
+                            "card result pending totalUnits=${session.totalPointUnits} distance=${session.resultDistance}"
+                        )
+                    } else {
+                        startCardGame(resetProgress = false, roundIndex = session.roundIndex + 1, totalPointUnits = session.totalPointUnits)
+                    }
+                }
+            }
+            CardPhase.RESULT_SCREEN -> {
+                if (!session.resultApplied && now >= session.nextPhaseAtMs) {
+                    applyDistanceReward(session.resultDistance)
+                    session.resultApplied = true
+                    playSound(DigiviceAudioManager.Cue.SELECT)
+                    Log.d("DigiviceV1Runtime", "card result applied distance=${session.resultDistance} current=${state.distance}")
+                }
+            }
+        }
+    }
+
+    private fun startCardGame(resetProgress: Boolean, roundIndex: Int, totalPointUnits: Int) {
+        val now = System.currentTimeMillis()
+        cardSession = CardSession(
+            roundIndex = roundIndex,
+            totalPointUnits = totalPointUnits,
+            roll1 = Random.nextInt(CARD_SPRITES.size),
+            roll2 = Random.nextInt(CARD_SPRITES.size),
+            nextAdvanceAtMs = now + CARD_REVEAL_TICK_MS
+        )
+        screen = Screen.CARD
+    }
+
+    private fun computeCardRoundPointUnits(session: CardSession): Int {
+        val leftEnemy = CARD_IDS[session.roll1] == -1
+        val rightEnemy = CARD_IDS[session.roll2] == -1
+        return scoreCardSelection(leftEnemy, session.press1) + scoreCardSelection(rightEnemy, session.press2)
+    }
+
+    private fun applyDistanceReward(rewardDistance: Int) {
+        state.distance = (state.distance - rewardDistance).coerceAtLeast(0)
+        state.perAreaDistances[state.area.coerceIn(state.perAreaDistances.indices)] = state.distance
+        state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
+        saveState()
+    }
+
+    private fun playResultCue(value: Int) {
+        when {
+            value > 0 -> playSound(DigiviceAudioManager.Cue.START)
+            value < 0 -> playSound(DigiviceAudioManager.Cue.SAD_SMALL)
+            else -> playSound(DigiviceAudioManager.Cue.SAD_HAPPY)
         }
     }
 
@@ -887,6 +1317,12 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     fun toggleAutorun() {
         state.autorun = !state.autorun
         saveState()
+    }
+
+    fun isAutorunEnabled(): Boolean = state.autorun
+
+    override fun triggerStep() {
+        performStep()
     }
 
     private fun ensureBattleSessionIfNeeded() {
@@ -1291,6 +1727,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         resetBootSequence()
         battleSession = null
         rescueSession = null
+        slotSession = null
+        cardSession = null
         screen = Screen.BOOT
         saveState()
     }
@@ -1330,6 +1768,36 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             defeat = state.defeat,
             battlePending = state.battlePending,
             lastEncounterType = encounterType,
+            slot = slotSession?.let { session ->
+                PhoneSlotSnapshot(
+                    roll1 = session.roll1,
+                    roll2 = session.roll2,
+                    phase = session.phase.name,
+                    stop1 = session.stop1,
+                    stop2 = session.stop2,
+                    counter1 = session.counter1,
+                    counter2 = session.counter2,
+                    animation = session.animation,
+                    resultDistance = session.resultDistance,
+                    resultApplied = session.resultApplied
+                )
+            },
+            card = cardSession?.let { session ->
+                PhoneCardSnapshot(
+                    roundIndex = session.roundIndex,
+                    totalPointUnits = session.totalPointUnits,
+                    roll1 = session.roll1,
+                    roll2 = session.roll2,
+                    press1 = session.press1,
+                    press2 = session.press2,
+                    counter = session.counter,
+                    phase = session.phase.name,
+                    animation = session.animation,
+                    roundPointUnits = session.roundPointUnits,
+                    resultDistance = session.resultDistance,
+                    resultApplied = session.resultApplied
+                )
+            },
             battle = battleSession?.let { session ->
                 val phaseTicks = battlePhaseTicks(session)
                 PhoneBattleSnapshot(
@@ -1485,17 +1953,83 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun drawMenuScreen() {
         drawText("MENU", 3, 6)
         drawText(MENU_ITEMS[menuIndex], 5, 13)
-        drawText(if (state.autorun) "RUN" else "MAN", 5, 19)
     }
 
-    private fun drawStatusScreen() {
-        val profile = state.currentProfile()
-        val evo = state.currentEvolution()
-        drawText(profile.shortCode, 3, 5)
-        drawText("L${evo.level}", 16, 5)
-        drawAssetSprite(EVOLUTION_SPRITES[state.currentChar][state.evoLevel.coerceIn(0, 2)], 14, 9, 10, 10, frameCounter / 12)
-        drawText("HP${evo.hp}", 3, 13)
-        drawText("AT${evo.attack}", 3, 19)
+    private fun drawSlotScreen() {
+        val session = slotSession ?: return
+        drawAssetSprite(SLOT_SPRITES[session.roll1], 0, 5, 16, 16, if (session.animation) 1 else 0)
+        drawAssetSprite(SLOT_SPRITES[session.roll2], 16, 5, 16, 16, if (session.animation) 1 else 0)
+    }
+
+    private fun drawSlotResultScreen() {
+        drawAssetSprite("spr_menu_stats", 0, 5, 25, 16, 0)
+        drawText(state.distance.toString(), 11, 13)
+    }
+
+    private fun drawCardScreen() {
+        val session = cardSession ?: return
+        when (session.phase) {
+            CardPhase.REVEAL -> {
+                drawAssetSprite("spr_card_digivice_v1", 0, 5, 16, 16, session.counter)
+                drawAssetSprite("spr_card_digivice_v1", 16, 5, 16, 16, session.counter)
+            }
+            CardPhase.CHOICE -> {
+                drawAssetSprite(CARD_SPRITES[session.roll1], 0, 5, 16, 16, 0)
+                drawAssetSprite(CARD_SPRITES[session.roll2], 16, 5, 16, 16, 0)
+            }
+            CardPhase.SCORE_DISPLAY -> {
+                drawCardResultSprite(session.roll1, session.press1, 0, session.animation)
+                drawCardResultSprite(session.roll2, session.press2, 16, session.animation)
+            }
+            CardPhase.RESULT_SCREEN -> Unit
+        }
+    }
+
+    private fun drawCardResultScreen() {
+        drawAssetSprite("spr_menu_stats", 0, 5, 25, 16, 0)
+        drawText(state.distance.toString(), 11, 13)
+    }
+
+    private fun drawCardResultSprite(roll: Int, pressed: Boolean, x: Int, animation: Boolean) {
+        val cardId = CARD_IDS[roll]
+        when {
+            cardId == -1 && pressed -> drawAssetSprite("spr_attack_d3_v1_small", x, 5, 16, 16, if (animation) 1 else 0)
+            cardId != -1 && pressed -> drawAssetSprite(DEFEAT_SPRITES[cardId], x, 5, 16, 16)
+            cardId == -1 -> drawAssetSprite(CARD_SPRITES[roll], x, 5, 16, 16, if (animation) 1 else 0)
+            animation -> drawAssetSprite(BASE_SPRITES[cardId], x, 5, 16, 16)
+            else -> drawAssetSprite(HAPPY_SPRITES[cardId], x, 5, 16, 16)
+        }
+    }
+
+    private fun drawStatusPagerScreen() {
+        drawAssetSprite("spr_menu_stats", 0, 5, 25, 16, statusPage)
+        when (statusPage % 4) {
+            0 -> drawText(state.distance.toString(), 11, 13)
+            1 -> drawText(state.steps.toString(), 11, 13)
+            2 -> drawText(state.dpower.toString(), 14, 13)
+            3 -> {
+                drawText(state.wins.toString(), 3, 7)
+                drawText(state.battles.toString(), 17, 7)
+                val percentage = if (state.battles > 0) ((state.wins * 100f) / state.battles.toFloat()).toInt() else 0
+                drawText(percentage.toString(), 11, 13)
+            }
+        }
+    }
+
+    private fun drawStatusMenuScreen() {
+        drawAssetSprite("spr_menu_stats_digivice_v1", 0, 5, 25, 16, statusMode)
+    }
+
+    private fun drawStatusDetailScreen() {
+        drawAssetSprite("spr_hp_bar_digivice_v1", 0, 5, 25, 16, currentStatusBarFrame())
+        drawAssetSprite(
+            EVOLUTION_SPRITES[state.currentChar][statusDetailPage.coerceIn(0, 2)],
+            8,
+            7,
+            16,
+            16,
+            frameCounter / 12
+        )
     }
 
     private fun drawMapScreen() {
@@ -1608,7 +2142,6 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         val label = when {
             state.battlePending -> "Battle ready"
             encounter.type == "boss" -> "Boss ahead"
-            state.autorun -> "Autorun active"
             else -> "Walking"
         }
         phoneCanvas.drawText(label, screenRect.left + 14f, screenRect.bottom - 18f, phoneSmallTextPaint)
@@ -1620,7 +2153,6 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             val prefix = if (index == menuIndex) "> " else "  "
             phoneCanvas.drawText(prefix + MENU_ITEMS[index], screenRect.left + 14f, screenRect.top + 42f + (index * 16f), phoneSmallTextPaint)
         }
-        phoneCanvas.drawText(if (state.autorun) "Autorun ON" else "Autorun OFF", screenRect.left + 14f, screenRect.bottom - 18f, phoneSmallTextPaint)
     }
 
     private fun drawPhoneStatus(screenRect: RectF) {

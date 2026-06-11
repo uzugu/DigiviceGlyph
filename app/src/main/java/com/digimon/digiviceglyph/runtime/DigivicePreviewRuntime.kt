@@ -42,6 +42,11 @@ class DigivicePreviewRuntime : GlyphButtonSink {
         lastActionAtMs = System.currentTimeMillis()
     }
 
+    override fun triggerStep() {
+        lastAction = "STEP"
+        lastActionAtMs = System.currentTimeMillis()
+    }
+
     fun renderFrame(): Bitmap {
         frameCounter++
         pixels.fill(OFF)
