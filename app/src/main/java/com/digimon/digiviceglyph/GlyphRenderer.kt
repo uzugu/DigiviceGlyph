@@ -12,16 +12,16 @@ class GlyphRenderer(private val context: Context) {
         private const val MATRIX_SIZE = 25
         private const val LCD_WIDTH = 32
         private const val LCD_HEIGHT = 16
-        private const val FIT_WIDTH = MATRIX_SIZE
-        private const val FIT_HEIGHT = 13
+        private const val FIT_WIDTH = LCD_WIDTH
+        private const val FIT_HEIGHT = LCD_HEIGHT
         private const val FIT_X_OFFSET = 0
-        private const val FIT_Y_OFFSET = (MATRIX_SIZE - FIT_HEIGHT) / 2
+        private const val FIT_Y_OFFSET = MATRIX_SIZE - LCD_HEIGHT
         private const val LUMA_THRESHOLD = 140
     }
 
     private var manager: GlyphMatrixManager? = null
     private var ready = false
-    private val matrixBitmap = Bitmap.createBitmap(MATRIX_SIZE, MATRIX_SIZE, Bitmap.Config.ARGB_8888)
+    private val matrixBitmap = Bitmap.createBitmap(LCD_WIDTH, MATRIX_SIZE, Bitmap.Config.ARGB_8888)
 
     fun init(mgr: GlyphMatrixManager) {
         manager = mgr
@@ -34,7 +34,7 @@ class GlyphRenderer(private val context: Context) {
         try {
             val matrixFrameBitmap = toMatrixBitmap(bitmap)
             val obj = GlyphMatrixObject.Builder()
-                .setImageSource(matrixFrameBitmap)
+                .setImageSource(cropMatrixBitmap(matrixFrameBitmap))
                 .setPosition(0, 0)
                 .setBrightness(4095)
                 .build()
@@ -88,25 +88,22 @@ class GlyphRenderer(private val context: Context) {
         }
 
         for (row in 0 until LCD_HEIGHT) {
-            val dstRowStart = row * FIT_HEIGHT / LCD_HEIGHT
-            val dstRowEndExclusive = ((row + 1) * FIT_HEIGHT + LCD_HEIGHT - 1) / LCD_HEIGHT
-            for (dstCol in 0 until FIT_WIDTH) {
-                val srcStart = dstCol * LCD_WIDTH / FIT_WIDTH
-                val srcEndExclusive = ((dstCol + 1) * LCD_WIDTH + FIT_WIDTH - 1) / FIT_WIDTH
-                var on = false
-                for (srcCol in srcStart until srcEndExclusive.coerceAtMost(LCD_WIDTH)) {
-                    if (lit[row][srcCol]) {
-                        on = true
+            val dstRow = (row * FIT_HEIGHT / LCD_HEIGHT + FIT_Y_OFFSET).coerceIn(0, MATRIX_SIZE - 1)
+            for (lcdCol in 0 until LCD_WIDTH) {
+                val matrixCol = (lcdCol * FIT_WIDTH / LCD_WIDTH).coerceIn(0, FIT_WIDTH - 1)
+                var on = lit[row][lcdCol]
+                for (srcCol in (lcdCol + 1) until LCD_WIDTH) {
+                    if ((srcCol * FIT_WIDTH / LCD_WIDTH).coerceIn(0, FIT_WIDTH - 1) == matrixCol) {
+                        on = on || lit[row][srcCol]
+                    } else {
                         break
                     }
                 }
-                for (dstRow in dstRowStart until dstRowEndExclusive.coerceAtMost(FIT_HEIGHT)) {
-                    matrixBitmap.setPixel(
-                        FIT_X_OFFSET + dstCol,
-                        FIT_Y_OFFSET + dstRow,
-                        if (on) Color.BLACK else Color.WHITE
-                    )
-                }
+                matrixBitmap.setPixel(
+                    FIT_X_OFFSET + matrixCol,
+                    dstRow,
+                    if (on) Color.WHITE else Color.BLACK
+                )
             }
         }
 
@@ -118,6 +115,11 @@ class GlyphRenderer(private val context: Context) {
             manager?.turnOff()
         } catch (_: Exception) {
         }
+    }
+
+    private fun cropMatrixBitmap(source: Bitmap): Bitmap {
+        if (source.width <= MATRIX_SIZE) return source
+        return Bitmap.createBitmap(source, 0, 0, MATRIX_SIZE, MATRIX_SIZE)
     }
 
     fun release() {
