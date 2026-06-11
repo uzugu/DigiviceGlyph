@@ -36,6 +36,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         MENU,
         PUSH,
         EVO,
+        READY_GO,
         EVO_SEQUENCE,
         SWAP,
         MINE_ATTACK,
@@ -589,7 +590,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             }
             BattlePhase.EVO -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
-                beginEvolutionSequence()
+                val next = session.evoCharge + 1
+                session.evoCharge = if (next > 3) 3 else next
+            }
+            BattlePhase.READY_GO -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                session.evoSuccess = session.evoCharge * 10 > Random.nextInt(0, 101)
+                setBattlePhase(session, BattlePhase.EVO_SEQUENCE)
             }
             BattlePhase.SWAP -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
@@ -617,14 +624,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.PUSH -> session.pushPress = (session.pushPress + 2).coerceAtMost(40)
             BattlePhase.EVO -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
-                val next = session.evoCharge + Random.nextInt(0, 3)
-                session.evoCharge = if (next > 10) 3 else next
+                val next = session.evoCharge + 1
+                session.evoCharge = if (next > 3) 3 else next
             }
             BattlePhase.SWAP -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 session.swapIndex = nextSwappableIndex(session.swapIndex)
             }
-            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.FINISH -> Unit
+            BattlePhase.READY_GO, BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.FINISH -> Unit
             BattlePhase.RESULT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 finalizeBattleResult()
@@ -912,7 +919,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun beginEvolutionSequence() {
         val session = battleSession ?: return
         session.evoSuccess = session.evoCharge * 10 > Random.nextInt(0, 101)
-        setBattlePhase(session, BattlePhase.EVO_SEQUENCE)
+        setBattlePhase(session, BattlePhase.READY_GO)
     }
 
     private fun commitSwap() {
@@ -1512,16 +1519,22 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 drawText("M${session.mineHp}", 2, 19)
                 drawText("E${session.enemyHp}", 13, 19)
                 drawAssetSprite(ATTACK_SPRITES[state.currentChar], 1, 8, 9, 9, frameCounter / 10)
-                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 14, 8, 10, 10, frameCounter / 10)
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 11, 8, 10, 10, frameCounter / 10)
             }
             BattlePhase.PUSH -> {
                 drawText("PUSH", 2, 11)
                 drawText(session.pushPress.toString().padStart(2, '0'), 8, 18)
                 drawChargeBar(16, 18, session.pushPress / 4)
-                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 14, 8, 10, 10, frameCounter / 6)
+                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 11, 8, 10, 10, frameCounter / 6)
             }
             BattlePhase.EVO -> {
                 drawText("EVO", 4, 11)
+                drawText(session.evoCharge.toString().padStart(2, '0'), 8, 18)
+                drawChargeBar(16, 18, session.evoCharge)
+                drawAssetSprite(EVOLUTION_SPRITES[state.currentChar][(session.currentEvo + 1).coerceAtMost(2)], 14, 8, 10, 10, frameCounter / 10)
+            }
+            BattlePhase.READY_GO -> {
+                drawText("READY", 4, 11)
                 drawText(session.evoCharge.toString().padStart(2, '0'), 8, 18)
                 drawChargeBar(16, 18, session.evoCharge)
                 drawAssetSprite(EVOLUTION_SPRITES[state.currentChar][(session.currentEvo + 1).coerceAtMost(2)], 14, 8, 10, 10, frameCounter / 10)
@@ -1537,7 +1550,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
                 drawText("ATK", 4, 11)
                 drawAssetSprite(ATTACK_SPRITES[state.currentChar], 2, 8, 10, 10, frameCounter / 8)
-                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 13, 8, 10, 10, frameCounter / 8)
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 11, 8, 10, 10, frameCounter / 8)
             }
             BattlePhase.FINISH, BattlePhase.RESULT -> {
                 drawText(session.resultText, 3, 11)
