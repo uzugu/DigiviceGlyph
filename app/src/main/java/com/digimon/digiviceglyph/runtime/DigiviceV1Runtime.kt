@@ -1015,6 +1015,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             }
             if (session.boss) {
                 state.areas[state.area.coerceIn(state.areas.indices)] = 2
+                state.perAreaDistances[state.area.coerceIn(state.perAreaDistances.indices)] = state.distance
                 if (state.area == MAP_DISTANCES.lastIndex) {
                     startFinishGameSequence()
                 } else {
@@ -1366,7 +1367,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     }
 
     private fun currentMapTargetDistance(): Int {
-        return if (mapPreviewArea == state.area) state.distance else MAP_DISTANCES[mapPreviewArea.coerceIn(MAP_DISTANCES.indices)]
+        return if (mapPreviewArea == state.area) state.distance else state.perAreaDistances[mapPreviewArea.coerceIn(state.perAreaDistances.indices)]
     }
 
     private fun isGameComplete(): Boolean {
@@ -1500,6 +1501,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun drawMapScreen() {
         drawText("AREA", 3, 6)
         drawText("${mapPreviewArea + 1}", 10, 13)
+        drawText("DIST:${state.perAreaDistances[mapPreviewArea.coerceIn(state.perAreaDistances.indices)]}", 3, 19)
         for (index in MAP_DISTANCES.indices) {
             val y = 20
             val x = 3 + index * 3
@@ -1634,7 +1636,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun drawPhoneMap(screenRect: RectF) {
         phoneCanvas.drawText("MAP", screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
         phoneCanvas.drawText("Area ${mapPreviewArea + 1}", screenRect.left + 14f, screenRect.top + 42f, phoneSmallTextPaint)
-        phoneCanvas.drawText("Distance ${MAP_DISTANCES[mapPreviewArea]}", screenRect.left + 14f, screenRect.top + 58f, phoneSmallTextPaint)
+        phoneCanvas.drawText("Distance ${state.perAreaDistances[mapPreviewArea.coerceIn(state.perAreaDistances.indices)]}", screenRect.left + 14f, screenRect.top + 58f, phoneSmallTextPaint)
         for (index in MAP_DISTANCES.indices) {
             val x = screenRect.left + 16f + index * 16f
             val y = screenRect.top + 86f

@@ -41,6 +41,7 @@ data class DigiviceV1State(
     var autorun: Boolean = false,
     var area: Int = 0,
     var areas: IntArray = intArrayOf(1, 1, 1, 1, 1, 1, 1),
+    var perAreaDistances: IntArray = intArrayOf(10000, 12000, 14000, 16000, 18000, 20000, 22000),
     var unlockedChars: BooleanArray = BooleanArray(8),
     var lastEncounter: DigiviceEncounter? = null
 ) {

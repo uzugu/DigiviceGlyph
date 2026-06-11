@@ -64,6 +64,7 @@ class DigiviceV1SaveRepository(context: Context) {
                 autorun = false,
                 area = loadInt(root, "area_digivice_v1", 0).coerceIn(0, 6),
                 areas = loadIntArray(root, "areas_digivice_v1", intArrayOf(1, 1, 1, 1, 1, 1, 1), 7),
+                perAreaDistances = loadIntArray(root, "map_distance_digivice_v1", intArrayOf(10000, 12000, 14000, 16000, 18000, 20000, 22000), 7),
                 unlockedChars = loadBooleanArray(root, "chars_digivice_v1", BooleanArray(8), 8)
             ).also { state ->
                 state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
@@ -86,6 +87,7 @@ class DigiviceV1SaveRepository(context: Context) {
             putEncrypted("chars_digivice_v1", JSONArray(state.unlockedChars.map { it }.toList()))
             putEncrypted("area_digivice_v1", state.area)
             putEncrypted("areas_digivice_v1", JSONArray(state.areas.map { it }.toList()))
+            putEncrypted("map_distance_digivice_v1", JSONArray(state.perAreaDistances.map { it }.toList()))
             putEncrypted("start_digivice_v1", state.startSequencePending)
             putEncrypted("sound_digivice_v1", state.soundEnabled)
             putEncrypted("scale_digivice_v1", state.scale)
