@@ -81,7 +81,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var phase: BattlePhase = BattlePhase.ALERT,
         var menuIndex: Int = 0,
         var pushPress: Int = 0,
+        var pushAlarm: Int = 0,
         var evoCharge: Int = 0,
+        var evoAlarm: Int = 0,
         var swapIndex: Int = 0,
         var resultText: String = "",
         var escaped: Boolean = false,
@@ -382,6 +384,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private var rescueSession: RescueSession? = null
     private var slotSession: SlotSession? = null
     private var cardSession: CardSession? = null
+    private var lastBackPressAtMs: Long = 0L
+    private val ALERT_FLEE_WINDOW_MS = 600L
 
     override fun onButtonDown(button: GlyphButton) {
         lastActionLabel = button.name
@@ -987,6 +991,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                         playSound(DigiviceAudioManager.Cue.SELECT)
                         setBattlePhase(session, BattlePhase.PUSH)
                         session.pushPress = 0
+                        session.pushAlarm = 150
                     }
                     "EVO" -> {
                         if (canEvolveInBattle(session)) {
@@ -994,6 +999,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                             state.dpower -= evolutionCost(session.currentEvo)
                             setBattlePhase(session, BattlePhase.EVO)
                             session.evoCharge = 0
+                            session.evoAlarm = 180
                             saveState()
                         } else {
                             playSound(DigiviceAudioManager.Cue.CANCEL)
@@ -1015,8 +1021,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
             BattlePhase.PUSH -> {
+                // A press in PUSH phase does nothing (glyph button disabled)
+                // Flicks (B/C) still increment pushPress
                 playSound(DigiviceAudioManager.Cue.SELECT)
-                resolvePush()
             }
             BattlePhase.EVO -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
@@ -1032,7 +1039,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 commitSwap()
             }
-            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> Unit
+            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
+                // No button input during attack
+                playSound(DigiviceAudioManager.Cue.SELECT)
+            }
             BattlePhase.FINISH, BattlePhase.RESULT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 finalizeBattleResult()
@@ -1051,17 +1061,25 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 session.menuIndex = (session.menuIndex + 1) % BATTLE_ITEMS.size
             }
-            BattlePhase.PUSH -> session.pushPress = (session.pushPress + 2).coerceAtMost(40)
+            BattlePhase.PUSH -> {
+                session.pushPress += 2
+                session.pushAlarm = (session.pushAlarm - 1).coerceAtLeast(0)
+            }
             BattlePhase.EVO -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 val next = session.evoCharge + 1
                 session.evoCharge = if (next > 3) 3 else next
+                session.evoAlarm = 180
             }
             BattlePhase.SWAP -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 session.swapIndex = nextSwappableIndex(session.swapIndex)
             }
-            BattlePhase.READY_GO, BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.FINISH -> Unit
+            BattlePhase.READY_GO, BattlePhase.EVO_SEQUENCE -> Unit
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.FINISH -> {
+                // No button input during attack
+                playSound(DigiviceAudioManager.Cue.SELECT)
+            }
             BattlePhase.RESULT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 finalizeBattleResult()
@@ -1071,18 +1089,26 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     private fun handleBattleBack() {
         val session = battleSession ?: return
+        val now = System.currentTimeMillis()
         when (session.phase) {
             BattlePhase.ALERT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
-                setBattlePhase(session, BattlePhase.MENU)
+                if (now - lastBackPressAtMs < ALERT_FLEE_WINDOW_MS) {
+                    // Second press within window — flee
+                    resolveRun()
+                } else {
+                    // First press — advance to MENU
+                    setBattlePhase(session, BattlePhase.MENU)
+                }
+                lastBackPressAtMs = now
             }
             BattlePhase.MENU -> {
-                playSound(DigiviceAudioManager.Cue.CANCEL)
-                resolveRun()
+                // C does nothing in MENU — only A confirms RUN
+                playSound(DigiviceAudioManager.Cue.SELECT)
             }
             BattlePhase.PUSH -> {
-                playSound(DigiviceAudioManager.Cue.CANCEL)
-                setBattlePhase(session, BattlePhase.MENU)
+                // C does nothing in PUSH — glyph button is disabled
+                playSound(DigiviceAudioManager.Cue.SELECT)
             }
             BattlePhase.EVO -> Unit
             BattlePhase.READY_GO -> Unit
@@ -1090,7 +1116,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.CANCEL)
                 setBattlePhase(session, BattlePhase.MENU)
             }
-            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> Unit
+            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
+                // No button input during attack
+                playSound(DigiviceAudioManager.Cue.SELECT)
+            }
             BattlePhase.FINISH, BattlePhase.RESULT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 finalizeBattleResult()
@@ -1182,6 +1211,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         val session = battleSession ?: return
         if (screen != Screen.BATTLE) return
         when (session.phase) {
+            BattlePhase.PUSH -> {
+                if (session.pushAlarm > 0) {
+                    session.pushAlarm -= 1
+                    if (session.pushAlarm <= 0) {
+                        resolvePush()
+                    }
+                }
+            }
             BattlePhase.EVO -> {
                 if (battlePhaseTicks(session) >= 14) {
                     beginEvolutionSequence()
@@ -1193,12 +1230,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
-                if (!session.hitSoundPlayed && battlePhaseTicks(session) >= 47) {
+                val ticks = battlePhaseTicks(session)
+                // Phase 1: Charge (0-30 ticks) — blink animation
+                // Phase 2: Move (30-60 ticks) — sprite moves across
+                // Phase 3: Hit (60-90 ticks) — hit animation
+                if (!session.hitSoundPlayed && ticks >= 60) {
                     session.hitSoundPlayed = true
                     playSound(DigiviceAudioManager.Cue.HIT)
                     playSound(DigiviceAudioManager.Cue.SELECT)
                 }
-                if (battlePhaseTicks(session) >= 49) {
+                if (ticks >= 90) {
                     completeAttackAnimation()
                 }
             }
@@ -1656,7 +1697,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         val stepMs = when (session.phase) {
             BattlePhase.EVO -> 120L
             BattlePhase.EVO_SEQUENCE -> 70L
-            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> 50L
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> 40L
             BattlePhase.FINISH -> 45L
             else -> 100L
         }
@@ -2097,9 +2138,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 drawAssetSprite(BASE_SPRITES[session.swapIndex], 15, 9, 10, 10, frameCounter / 10)
             }
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
+                val ticks = battlePhaseTicks(session)
+                val moveProgress = (ticks / 30f).coerceAtMost(1f)
+                val spriteX = (2 + moveProgress * 9).toInt()
+                val spriteY = (11 - moveProgress * 2).toInt()
                 drawText("ATK", 4, 11)
-                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 2, 8, 10, 10, frameCounter / 8)
-                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 11, 8, 10, 10, frameCounter / 8)
+                drawAssetSprite(ATTACK_SPRITES[state.currentChar], spriteX, 8, 10, 10, frameCounter / 8)
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], spriteY, 8, 10, 10, frameCounter / 8)
             }
             BattlePhase.FINISH, BattlePhase.RESULT -> {
                 drawText(session.resultText, 3, 11)

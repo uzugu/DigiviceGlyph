@@ -98,6 +98,42 @@ private fun ensureBattleSessionIfNeeded() {
 }
 ```
 
+## Battle Phase Button Behavior
+
+| Phase    | A (confirm)          | B (advance)       | C (back)                  |
+|----------|----------------------|-------------------|---------------------------|
+| ALERT    | advance to MENU      | advance to MENU   | double-press to flee (600ms window) |
+| MENU     | confirm RUN          | advance to PUSH   | no-op (no longer abandons) |
+| PUSH     | no-op (shake phone)  | no-op (shake)     | no-op (shake)             |
+| MINE_ATK | no-op (watch anim)   | no-op (watch)     | no-op (watch)             |
+| ENEMY_ATK| no-op (watch anim)   | no-op (watch)     | no-op (watch)             |
+| FINISH   | advance to RESULT    | advance to RESULT | advance to RESULT         |
+
+### ALERT double-press flee
+
+First C press advances ALERT→MENU. Second C press within 600ms triggers flee. Track with `lastBackPressAtMs`:
+
+```kotlin
+private var lastBackPressAtMs: Long = 0L
+private val ALERT_FLEE_WINDOW_MS = 600L
+```
+
+## PUSH Phase Timing
+
+- **Original GML**: `alarm[0] = 300` at 30 fps → 10 seconds
+- **Kotlin**: `pushAlarm = 150` at ~15 fps → ~10 seconds
+- **Flick behavior**: `pushPress += 2` (no max cap, original GML has no coerceAtMost)
+- **Win condition**: `pushPress * 3 > random(0, 101)`
+
+## Attack Animation Timing (MINE_ATTACK / ENEMY_ATTACK)
+
+- **stepMs = 40ms** (not 50ms)
+- **3 phases** (mirroring original GML `obj_battle_fight_d3_v1`):
+  - Charge: 0–30 ticks (~1.2s) — blink animation
+  - Move: 30–60 ticks (~1.2s) — sprite crosses screen
+  - Hit: 60–90 ticks (~1.2s) — hit sound at tick 60, complete at tick 90
+- **Sprite movement**: `spriteX = 2 + moveProgress * 9`, enemy moves from 11→9
+
 ## Common Pitfalls
 
 1. **READY_GO phase**: Must be set in `beginEvolutionSequence()` before EVO_SEQUENCE. Without it, digivolution skips the READY_GO phase and the charge bar doesn't render.
@@ -111,6 +147,8 @@ private fun ensureBattleSessionIfNeeded() {
 5. **lastEncounter caching**: `calculateMilestone` is called in both `performStep` and `ensureBattleSessionIfNeeded`. The `?:` operator ensures it's only computed once when `lastEncounter` is already set.
 
 6. **Autorun interval**: Must be 1000ms (1 step/sec), not 650ms.
+
+7. **Float-to-Int in draw calls**: When using `moveProgress * N` in `drawAssetSprite`, cast to Int (e.g., `val spriteY = (11 - moveProgress * 2).toInt()`).
 
 ## Verification Checklist
 

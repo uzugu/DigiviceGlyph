@@ -27,4 +27,5 @@
     <string name="notification_channel_name">Digivice Glyph Preview</string>
     <string name="notification_title">Digivice Glyph Preview</string>
     <string name="notification_text">Running the native Digivice V1 Glyph runtime.</string>
+    <string name="walk_490">Walk 490</string>
 </resources>

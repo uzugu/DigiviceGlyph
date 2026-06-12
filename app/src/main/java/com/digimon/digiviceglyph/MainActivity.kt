@@ -30,6 +30,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: GlyphPreviewView
     private lateinit var btnAutoRun: Button
     private lateinit var btnSound: Button
+    private lateinit var btnWalk490: Button
     private lateinit var runtime: DigiviceV1Runtime
     private val previewHandler = Handler(Looper.getMainLooper())
     private val previewTicker = object : Runnable {
@@ -65,6 +66,7 @@ class MainActivity : AppCompatActivity() {
         val btnC = findViewById<Button>(R.id.btnC)
         btnAutoRun = findViewById(R.id.btnAutoRun)
         btnSound = findViewById(R.id.btnSound)
+        btnWalk490 = findViewById(R.id.btnWalk490)
 
         updateGlyphStatus()
 
@@ -103,6 +105,12 @@ class MainActivity : AppCompatActivity() {
         btnSound.setOnClickListener {
             runtime.toggleSound()
             updateSoundButton()
+            previewView.setBitmap(runtime.renderPhoneFrame())
+        }
+        btnWalk490.setOnClickListener {
+            for (i in 0 until 490) {
+                runtime.triggerStep()
+            }
             previewView.setBitmap(runtime.renderPhoneFrame())
         }
         updateAutorunButton()
