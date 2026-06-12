@@ -47,11 +47,6 @@ data class DigiviceV1State(
 ) {
     fun currentProfile(): DigimonProfile = DIGIMON_PROFILES[currentChar.coerceIn(DIGIMON_PROFILES.indices)]
 
-    fun currentEvolution(): EvolutionProfile {
-        val profile = currentProfile()
-        return profile.evolutions[evoLevel.coerceIn(profile.evolutions.indices)]
-    }
-
     companion object {
         val DIGIMON_PROFILES: List<DigimonProfile> = listOf(
             DigimonProfile(

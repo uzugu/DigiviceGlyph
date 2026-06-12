@@ -56,7 +56,7 @@ class DigiviceV1SaveRepository(context: Context) {
                 battles = loadInt(root, "battle_digivice_v1", 0),
                 wins = loadInt(root, "wins_digivice_v1", 0),
                 currentChar = loadInt(root, "char_digivice_v1", 0).coerceIn(0, 7),
-                evoLevel = inferEvolutionLevel(loadInt(root, "wins_digivice_v1", 0)),
+                evoLevel = 0,
                 defeat = loadBoolean(root, "defeat_digivice_v1", false),
                 battlePending = loadBoolean(root, "battle_start_digivice_v1", false),
                 eventPending = false,
@@ -158,15 +158,6 @@ class DigiviceV1SaveRepository(context: Context) {
             }
             .joinToString(separator = "")
     }
-
-    private fun inferEvolutionLevel(wins: Int): Int {
-        return when {
-            wins >= 8 -> 2
-            wins >= 3 -> 1
-            else -> 0
-        }
-    }
-
     private fun calculateMilestone(distance: Int, steps: Int, dpower: Int): DigiviceEncounter {
         val currentStepMod = steps % 500
         val stepsToNext = if (currentStepMod == 0) 500 else 500 - currentStepMod

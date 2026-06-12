@@ -30,8 +30,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewView: GlyphPreviewView
     private lateinit var btnAutoRun: Button
     private lateinit var btnSound: Button
+    private lateinit var btnStepMultiplier: Button
     private lateinit var btnWalk490: Button
     private lateinit var runtime: DigiviceV1Runtime
+    private var activityRecognitionPromptedThisLaunch = false
+    private var pendingPreviewStartAfterActivityPermission = false
+    private var pendingPreviewToastAfterActivityPermission = false
     private val previewHandler = Handler(Looper.getMainLooper())
     private val previewTicker = object : Runnable {
         override fun run() {
@@ -44,9 +48,26 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (granted || Build.VERSION.SDK_INT < 33) {
-            startPreviewService()
+            ensureActivityRecognitionThenStartPreview(showToast = true)
         } else {
             Toast.makeText(this, R.string.notification_required, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private val requestActivityRecognitionPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val shouldStartPreview = pendingPreviewStartAfterActivityPermission
+        val showPreviewToast = pendingPreviewToastAfterActivityPermission
+        pendingPreviewStartAfterActivityPermission = false
+        pendingPreviewToastAfterActivityPermission = false
+        if (granted || Build.VERSION.SDK_INT < 29) {
+            if (shouldStartPreview) {
+                startPreviewService(showToast = showPreviewToast)
+            }
+        } else if (shouldStartPreview) {
+            Toast.makeText(this, R.string.activity_recognition_required, Toast.LENGTH_LONG).show()
+            startPreviewService(showToast = showPreviewToast)
         }
     }
 
@@ -66,6 +87,7 @@ class MainActivity : AppCompatActivity() {
         val btnC = findViewById<Button>(R.id.btnC)
         btnAutoRun = findViewById(R.id.btnAutoRun)
         btnSound = findViewById(R.id.btnSound)
+        btnStepMultiplier = findViewById(R.id.btnStepMultiplier)
         btnWalk490 = findViewById(R.id.btnWalk490)
 
         updateGlyphStatus()
@@ -78,7 +100,7 @@ class MainActivity : AppCompatActivity() {
             ) {
                 requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else {
-                startPreviewService()
+                ensureActivityRecognitionThenStartPreview(showToast = true)
             }
         }
 
@@ -107,21 +129,26 @@ class MainActivity : AppCompatActivity() {
             updateSoundButton()
             previewView.setBitmap(runtime.renderPhoneFrame())
         }
+        btnStepMultiplier.setOnClickListener {
+            runtime.cycleStepMultiplier()
+            updateStepMultiplierButton()
+        }
         btnWalk490.setOnClickListener {
-            for (i in 0 until 490) {
-                runtime.triggerStep()
-            }
+            runtime.triggerRawSteps(490)
             previewView.setBitmap(runtime.renderPhoneFrame())
         }
         updateAutorunButton()
         updateSoundButton()
+        updateStepMultiplierButton()
         previewView.setBitmap(runtime.renderPhoneFrame())
+        maybeEnsureWalkingServiceOnOpen()
     }
 
     override fun onResume() {
         super.onResume()
         updateGlyphStatus()
         updateAutorunButton()
+        updateStepMultiplierButton()
         previewHandler.removeCallbacks(previewTicker)
         previewHandler.post(previewTicker)
     }
@@ -131,7 +158,7 @@ class MainActivity : AppCompatActivity() {
         previewHandler.removeCallbacks(previewTicker)
     }
 
-    private fun startPreviewService() {
+    private fun startPreviewService(showToast: Boolean = true) {
         if (GlyphAvailability.isAvailable && !GlyphAvailability.isMasterGlyphEnabled(this)) {
             Toast.makeText(this, R.string.device_status_master_disabled, Toast.LENGTH_LONG).show()
         }
@@ -139,7 +166,36 @@ class MainActivity : AppCompatActivity() {
             action = DigiviceGlyphToyService.ACTION_START_PREVIEW
         }
         ContextCompat.startForegroundService(this, intent)
-        Toast.makeText(this, R.string.preview_started, Toast.LENGTH_SHORT).show()
+        if (showToast) {
+            Toast.makeText(this, R.string.preview_started, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun ensureActivityRecognitionThenStartPreview(showToast: Boolean) {
+        if (Build.VERSION.SDK_INT >= 29 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            activityRecognitionPromptedThisLaunch = true
+            pendingPreviewStartAfterActivityPermission = true
+            pendingPreviewToastAfterActivityPermission = showToast
+            requestActivityRecognitionPermission.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+            return
+        }
+        startPreviewService(showToast = showToast)
+    }
+
+    private fun maybeEnsureWalkingServiceOnOpen() {
+        if (Build.VERSION.SDK_INT >= 29 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            if (activityRecognitionPromptedThisLaunch) return
+            activityRecognitionPromptedThisLaunch = true
+            pendingPreviewStartAfterActivityPermission = true
+            pendingPreviewToastAfterActivityPermission = false
+            requestActivityRecognitionPermission.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+            return
+        }
+        startPreviewService(showToast = false)
     }
 
     private fun updateGlyphStatus() {
@@ -162,6 +218,10 @@ class MainActivity : AppCompatActivity() {
         btnSound.text = getString(
             if (runtime.isSoundEnabled()) R.string.sound_toggle_on else R.string.sound_toggle_off
         )
+    }
+
+    private fun updateStepMultiplierButton() {
+        btnStepMultiplier.text = getString(R.string.step_multiplier_format, runtime.currentStepMultiplier())
     }
 
     private fun bindRuntimeButton(button: Button, glyphButton: GlyphButton) {

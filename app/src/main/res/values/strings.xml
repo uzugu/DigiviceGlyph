@@ -20,10 +20,12 @@
     <string name="autorun_toggle_on">Auto Walk On</string>
     <string name="sound_toggle_off">Sound Off</string>
     <string name="sound_toggle_on">Sound On</string>
+    <string name="step_multiplier_format">Step Multiplier x%1$d</string>
     <string name="open_settings">Open System Settings</string>
-    <string name="control_notes">The phone view mirrors the same runtime used by the Glyph service. From idle, B opens the six-item menu, C opens the distance and step pager, pressing C again advances those pages, and vertical flicks count steps. Auto Walk is an app-only helper toggle and is not part of the Digivice menu flow.</string>
+    <string name="control_notes">The phone view mirrors the same runtime used by the Glyph service. From idle, B opens the six-item menu, C opens the distance and step pager, pressing C again advances those pages, and vertical flicks or real walking motion count steps while the Digivice is idle. Auto Walk and the step multiplier are app-only helper controls.</string>
     <string name="preview_started">Preview service started</string>
     <string name="notification_required">Notification permission is required to keep the preview service alive.</string>
+    <string name="activity_recognition_required">Allow physical activity access so real walking can count steps.</string>
     <string name="notification_channel_name">Digivice Glyph Preview</string>
     <string name="notification_title">Digivice Glyph Preview</string>
     <string name="notification_text">Running the native Digivice V1 Glyph runtime.</string>

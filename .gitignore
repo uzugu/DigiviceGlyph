@@ -6,3 +6,8 @@ build/
 app/build/
 captures/
 *.iml
+.qwen/
+notes/
+AGENT_HANDOFF.md
+app/AGENT_HANDOFF.md
+app/src/main/java/com/digimon/digiviceglyph/input/findings.md

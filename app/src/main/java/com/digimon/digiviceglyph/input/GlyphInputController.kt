@@ -24,11 +24,20 @@ class GlyphInputController(context: Context) : SensorEventListener {
         private const val FLICK_VIBRATE_AMPLITUDE = 180
         private const val ACCEL_SMOOTH_ALPHA = 0.35f
         private const val ACCEL_GRAVITY_ALPHA = 0.82f
+        private const val WALK_TRIGGER_THRESHOLD = 0.55f
+        private const val WALK_REARM_THRESHOLD = 0.16f
+        private const val WALK_DEBOUNCE_MS = 180L
         private const val MASH_TRIGGER_THRESHOLD = 2.35f
         private const val MASH_REARM_THRESHOLD = 0.95f
     }
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val stepCounterSensor =
+        sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER, true)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+    private val stepDetectorSensor =
+        sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR, true)
+            ?: sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
     private val linearAccelerationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION)
     private val accelerometerFallback =
         if (linearAccelerationSensor == null) sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) else null
@@ -61,6 +70,9 @@ class GlyphInputController(context: Context) : SensorEventListener {
     private var lastMashSignature = 0
     private var lastMashSampleLogAtMs = 0L
     private var lastMotionMode = GlyphMotionMode.DEFAULT
+    private var walkArmed = true
+    private var lastWalkStepAtMs = 0L
+    private var lastStepCounterValue: Int? = null
 
     private val releaseGlyphChangePulse = Runnable {
         glyphChangePulseDown = false
@@ -131,6 +143,19 @@ class GlyphInputController(context: Context) : SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent) {
         val nowMs = SystemClock.elapsedRealtime()
+        if (event.sensor.type == Sensor.TYPE_STEP_COUNTER) {
+            processStepCounterEvent(nowMs, event)
+            return
+        }
+        if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR) {
+            if (sink?.acceptsPassiveWalking() == true && canTriggerWalkingStep(nowMs)) {
+                Log.d(TAG, "Step detector accepted values=${event.values.joinToString()}")
+                lastWalkStepAtMs = nowMs
+                sink?.triggerStep()
+            }
+            return
+        }
+
         val x: Float
         val y: Float
         val z: Float
@@ -169,6 +194,10 @@ class GlyphInputController(context: Context) : SensorEventListener {
             return
         }
 
+        if (sink?.acceptsPassiveWalking() == true) {
+            processWalkingMotion(nowMs, filteredX, filteredY, filteredZ)
+        }
+
         val gesture = flickDetector.update(
             nowMs = nowMs,
             x = filteredX,
@@ -189,11 +218,28 @@ class GlyphInputController(context: Context) : SensorEventListener {
 
     private fun registerSensors() {
         if (sensorsRegistered) return
-        val sensor = linearAccelerationSensor ?: accelerometerFallback
-        sensorsRegistered = sensor?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        } == true
-        Log.d(TAG, "Motion sensor registered=$sensorsRegistered type=${sensor?.stringType}")
+        var registeredAny = false
+        var stepCounterRegistered = false
+        var stepDetectorRegistered = false
+        stepCounterSensor?.let {
+            stepCounterRegistered = sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+            registeredAny = stepCounterRegistered || registeredAny
+        }
+        stepDetectorSensor?.let {
+            stepDetectorRegistered = sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+            registeredAny = stepDetectorRegistered || registeredAny
+        }
+        val motionSensor = linearAccelerationSensor ?: accelerometerFallback
+        var motionRegistered = false
+        motionSensor?.let {
+            motionRegistered = sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
+            registeredAny = motionRegistered || registeredAny
+        }
+        sensorsRegistered = registeredAny
+        Log.d(
+            TAG,
+            "Sensor registration any=$sensorsRegistered motionRegistered=$motionRegistered motionType=${motionSensor?.stringType} stepCounterRegistered=$stepCounterRegistered stepCounterType=${stepCounterSensor?.stringType} stepDetectorRegistered=$stepDetectorRegistered stepDetectorType=${stepDetectorSensor?.stringType}"
+        )
     }
 
     private fun syncButtonA() {
@@ -309,7 +355,60 @@ class GlyphInputController(context: Context) : SensorEventListener {
         lastMashSignature = 0
         lastMashSampleLogAtMs = 0L
         lastMotionMode = GlyphMotionMode.DEFAULT
+        walkArmed = true
+        lastWalkStepAtMs = 0L
+        lastStepCounterValue = null
         flickDetector.reset()
+    }
+
+    private fun processStepCounterEvent(nowMs: Long, event: SensorEvent) {
+        val currentValue = event.values.firstOrNull()?.toInt() ?: return
+        val previousValue = lastStepCounterValue
+        lastStepCounterValue = currentValue
+        if (previousValue == null) {
+            Log.d(TAG, "Step counter baseline=$currentValue")
+            return
+        }
+
+        val delta = (currentValue - previousValue).coerceAtLeast(0)
+        if (delta == 0) return
+        if (sink?.acceptsPassiveWalking() != true) {
+            Log.d(TAG, "Step counter delta ignored delta=$delta screenNotEligible=true")
+            return
+        }
+        if (!canTriggerWalkingStep(nowMs)) {
+            Log.d(TAG, "Step counter delta ignored delta=$delta debounce=${nowMs - lastWalkStepAtMs}ms")
+            return
+        }
+
+        lastWalkStepAtMs = nowMs
+        Log.d(TAG, "Step counter accepted current=$currentValue previous=$previousValue delta=$delta")
+        repeat(delta) {
+            sink?.triggerStep()
+        }
+    }
+
+    private fun processWalkingMotion(nowMs: Long, x: Float, y: Float, z: Float) {
+        val magnitudeSquared = x * x + y * y + z * z
+        val rearmSquared = WALK_REARM_THRESHOLD * WALK_REARM_THRESHOLD
+        val triggerSquared = WALK_TRIGGER_THRESHOLD * WALK_TRIGGER_THRESHOLD
+
+        if (magnitudeSquared <= rearmSquared) {
+            walkArmed = true
+            return
+        }
+        if (!walkArmed || magnitudeSquared < triggerSquared || !canTriggerWalkingStep(nowMs)) {
+            return
+        }
+
+        walkArmed = false
+        lastWalkStepAtMs = nowMs
+        Log.d(TAG, "Walking motion accepted magnitude=${"%.2f".format(kotlin.math.sqrt(magnitudeSquared.toDouble()))}")
+        sink?.triggerStep()
+    }
+
+    private fun canTriggerWalkingStep(nowMs: Long): Boolean {
+        return nowMs - lastWalkStepAtMs >= WALK_DEBOUNCE_MS
     }
 
     private fun vibrateFlickConfirm() {

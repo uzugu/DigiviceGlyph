@@ -125,6 +125,15 @@
             android:text="@string/sound_toggle_off" />
 
         <Button
+            android:id="@+id/btnStepMultiplier"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/step_multiplier_format"
+            android:textColor="#F4F6F8"
+            android:backgroundTint="#546E7A" />
+
+        <Button
             android:id="@+id/btnWalk490"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

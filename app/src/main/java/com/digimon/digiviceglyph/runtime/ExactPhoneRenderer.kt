@@ -100,9 +100,13 @@ data class PhoneVisualSnapshot(
     val statusDetailPage: Int,
     val statusBarFrame: Int,
     val autorun: Boolean,
+    val stepActive: Boolean,
+    val happy: Boolean,
+    val happyAnimation: Boolean,
     val defeat: Boolean,
     val battlePending: Boolean,
     val lastEncounterType: String,
+    val finishReturnX: Int,
     val slot: PhoneSlotSnapshot?,
     val card: PhoneCardSnapshot?,
     val battle: PhoneBattleSnapshot?,
@@ -273,6 +277,7 @@ class ExactPhoneRenderer(
             "MAP" -> drawMap(snapshot)
             "MAP_CHANGE" -> drawMapChange(snapshot)
             "FINISH_GAME" -> drawFinishGame(snapshot)
+            "FINISH_RETURN" -> drawFinishReturn(snapshot)
             "BATTLE" -> drawBattle(snapshot, frameCounter)
             "RESCUE" -> drawRescue(snapshot)
         }
@@ -329,12 +334,15 @@ class ExactPhoneRenderer(
 
     private fun drawIdle(snapshot: PhoneVisualSnapshot, frameCounter: Int) {
         val spriteName = when {
+            snapshot.happy && !snapshot.happyAnimation -> HAPPY_SPRITES[snapshot.currentChar]
             snapshot.defeat -> DEFEAT_SPRITES[snapshot.currentChar]
-            snapshot.autorun && (frameCounter / 8) % 2 == 1 -> STEP_SPRITES[snapshot.currentChar]
+            snapshot.stepActive -> STEP_SPRITES[snapshot.currentChar]
             else -> BASE_SPRITES[snapshot.currentChar]
         }
         drawContentSprite(spriteName, 8, 0, frameCounter / 8)
-        if (snapshot.defeat) {
+        if (snapshot.happy && !snapshot.happyAnimation) {
+            drawContentSprite("spr_happy", 24, 0)
+        } else if (snapshot.defeat) {
             drawContentSprite("spr_defeat", 24, 0)
         } else if (snapshot.battlePending || snapshot.lastEncounterType == "boss") {
             drawContentSprite("spr_happy", 24, 0)
@@ -460,6 +468,10 @@ class ExactPhoneRenderer(
         } else {
             drawContentSprite("spr_end_digivice_v1", 0, 0, snapshot.finishAnimFrame)
         }
+    }
+
+    private fun drawFinishReturn(snapshot: PhoneVisualSnapshot) {
+        drawContentSprite(BASE_SPRITES[snapshot.currentChar], snapshot.finishReturnX, 0)
     }
 
     private fun drawBattle(snapshot: PhoneVisualSnapshot, frameCounter: Int) {

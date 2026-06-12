@@ -33,6 +33,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         MAP,
         MAP_CHANGE,
         FINISH_GAME,
+        FINISH_RETURN,
         BATTLE,
         RESCUE
     }
@@ -93,7 +94,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var pendingMineHp: Int? = null,
         var pendingEnemyHp: Int? = null,
         var pendingTurn: Int? = null,
-        var hitSoundPlayed: Boolean = false,
+        var defenseSoundPlayed: Boolean = false,
         var damageSoundPlayed: Boolean = false
     )
 
@@ -202,6 +203,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         private const val CARD_BLINK_MS = 1000L
         private const val PUSH_ALARM_TICKS = 300
         private const val PUSH_WINDOW_MS = 10_000L
+        private val STEP_MULTIPLIERS = intArrayOf(1, 3, 5, 10, 25, 50)
         private val MENU_ITEMS = listOf("STATE", "MAP", "SLOT", "CARD", "MED", "VS")
         private val BATTLE_ITEMS = listOf("ATK", "EVO", "SWP", "RUN")
         private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
@@ -642,12 +644,20 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private var finishOffsetX = 32
     private var finishAnimFrame = 0
     private var finishNextAtMs = 0L
+    private var finishReturnX = 32
+    private var finishReturnNextAtMs = 0L
+    private var happyStartedAtMs = 0L
+    private var happyEndsAtMs = 0L
+    private var stepPoseEndsAtMs = 0L
+    private var medicalRecoveryPending = false
+    private var stepMultiplierIndex = 0
     private var battleSession: BattleSession? = null
     private var rescueSession: RescueSession? = null
     private var slotSession: SlotSession? = null
     private var cardSession: CardSession? = null
     private var lastBackPressAtMs: Long = 0L
     private val ALERT_FLEE_WINDOW_MS = 600L
+    private val STEP_POSE_DURATION_MS = 6_000L
 
     override fun onButtonDown(button: GlyphButton) {
         lastActionLabel = button.name
@@ -676,6 +686,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         maybeAdvanceBattleAnimations()
         maybeAdvanceRescueSequence()
         maybeAdvanceFinishSequence()
+        maybeAdvanceFinishReturn()
+        maybeAdvanceHappyState()
         pixels.fill(OFF)
         drawFrame()
         drawHeader()
@@ -695,6 +707,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             Screen.MAP -> drawMapScreen()
             Screen.MAP_CHANGE -> drawMapScreen()
             Screen.FINISH_GAME -> drawIdleScreen()
+            Screen.FINISH_RETURN -> drawFinishReturnScreen()
             Screen.BATTLE -> drawBattleScreen()
             Screen.RESCUE -> drawRescueScreen()
         }
@@ -725,6 +738,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         maybeAdvanceBattleAnimations()
         maybeAdvanceRescueSequence()
         maybeAdvanceFinishSequence()
+        maybeAdvanceFinishReturn()
+        maybeAdvanceHappyState()
         return exactPhoneRenderer.renderGlyphContent(buildPhoneSnapshot(), frameCounter)
     }
 
@@ -770,7 +785,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.CHANGE)
                 screen = Screen.IDLE
             }
-            Screen.FINISH_GAME -> Unit
+            Screen.FINISH_GAME, Screen.FINISH_RETURN -> Unit
             Screen.BATTLE -> handleBattleConfirm()
             Screen.RESCUE -> resolveRescue()
         }
@@ -825,7 +840,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
             Screen.MAP_CHANGE -> Unit
-            Screen.FINISH_GAME -> Unit
+            Screen.FINISH_GAME, Screen.FINISH_RETURN -> Unit
             Screen.BATTLE -> handleBattleAdvance()
             Screen.RESCUE -> {
                 val rescue = rescueSession ?: return
@@ -887,7 +902,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.CANCEL)
                 screen = Screen.MAP
             }
-            Screen.FINISH_GAME -> Unit
+            Screen.FINISH_GAME, Screen.FINISH_RETURN -> Unit
             Screen.BATTLE -> handleBattleBack()
             Screen.RESCUE -> Unit
         }
@@ -943,29 +958,42 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     }
 
     private fun handleMainMenuConfirm() {
-        playSound(DigiviceAudioManager.Cue.SELECT)
         Log.d(
             "DigiviceV1Runtime",
             "handleMainMenuConfirm: menuIndex=$menuIndex item=${MENU_ITEMS[menuIndex]} defeat=${state.defeat}"
         )
         when (menuIndex) {
             0 -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
                 screen = Screen.STATUS_SELECT
             }
             1 -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
                 mapPreviewArea = state.area
                 screen = Screen.MAP
             }
-            2 -> startSlotGame()
-            3 -> startCardGame(resetProgress = true)
+            2 -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                startSlotGame()
+            }
+            3 -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                startCardGame(resetProgress = true)
+            }
             4 -> {
                 if (state.defeat) {
-                    state.defeat = false
+                    medicalRecoveryPending = true
+                    activateHappyIdle(durationMs = 8_000L)
+                    screen = Screen.IDLE
                     saveState()
+                } else {
+                    playSound(DigiviceAudioManager.Cue.CANCEL)
                 }
-                screen = Screen.IDLE
             }
-            5 -> resetProgress()
+            5 -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                resetProgress()
+            }
         }
     }
 
@@ -1399,7 +1427,21 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         if (!state.autorun || screen != Screen.IDLE) return
         val now = System.currentTimeMillis()
         if (now - lastStepAtMs >= AUTORUN_STEP_INTERVAL_MS) {
-            performStep()
+            triggerStep()
+        }
+    }
+
+    private fun acceptsStepProgressOnCurrentScreen(): Boolean {
+        return when (screen) {
+            Screen.IDLE,
+            Screen.MENU,
+            Screen.STATUS,
+            Screen.STATUS_SELECT,
+            Screen.STATUS_MENU,
+            Screen.STATUS_DETAIL,
+            Screen.MAP,
+            Screen.MAP_CHANGE -> true
+            else -> false
         }
     }
 
@@ -1503,13 +1545,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             }
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
                 val timeline = attackTimeline(session) ?: return
-                if (!session.hitSoundPlayed && timeline.hitTriggered) {
-                    session.hitSoundPlayed = true
-                    playSound(DigiviceAudioManager.Cue.HIT)
+                if (!session.defenseSoundPlayed && timeline.turn >= 18) {
+                    session.defenseSoundPlayed = true
+                    playSound(DigiviceAudioManager.Cue.ATTACK_DEFENSE)
                 }
                 if (!session.damageSoundPlayed && timeline.damageApplied) {
                     session.damageSoundPlayed = true
-                    playSound(DigiviceAudioManager.Cue.SELECT)
+                    playSound(DigiviceAudioManager.Cue.ATTACK_HIT)
                 }
                 if (timeline.finished) {
                     completeAttackAnimation()
@@ -1606,19 +1648,74 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 state.distance = 22000
                 state.defeat = false
                 state.area = MAP_DISTANCES.lastIndex
+                state.battlePending = false
+                state.eventPending = false
                 state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
                 finishOffsetX = 32
                 finishAnimFrame = 0
                 finishNextAtMs = 0L
-                screen = Screen.IDLE
-                saveState()
+                startFinishReturn()
             }
         }
     }
 
-    private fun performStep() {
-        if (state.defeat || state.connectMode || state.battlePending) return
-        lastStepAtMs = System.currentTimeMillis()
+    private fun startFinishReturn() {
+        finishReturnX = 32
+        finishReturnNextAtMs = System.currentTimeMillis() + 100L
+        screen = Screen.FINISH_RETURN
+    }
+
+    private fun maybeAdvanceFinishReturn() {
+        if (screen != Screen.FINISH_RETURN) return
+        val now = System.currentTimeMillis()
+        if (finishReturnNextAtMs == 0L || now < finishReturnNextAtMs) return
+
+        if (finishReturnX != 8) {
+            finishReturnX -= 1
+            finishReturnNextAtMs = now + 100L
+            return
+        }
+
+        finishReturnX = 32
+        finishReturnNextAtMs = 0L
+        activateHappyIdle(durationMs = 8_000L)
+        screen = Screen.IDLE
+        saveState()
+    }
+
+    private fun activateHappyIdle(durationMs: Long) {
+        happyStartedAtMs = System.currentTimeMillis()
+        happyEndsAtMs = happyStartedAtMs + durationMs
+        playSound(DigiviceAudioManager.Cue.HAPPY)
+    }
+
+    private fun maybeAdvanceHappyState() {
+        if (happyEndsAtMs == 0L) return
+        if (System.currentTimeMillis() < happyEndsAtMs) return
+        happyStartedAtMs = 0L
+        happyEndsAtMs = 0L
+        if (medicalRecoveryPending) {
+            medicalRecoveryPending = false
+            state.defeat = false
+            saveState()
+        }
+    }
+
+    private fun isHappyIdleActive(): Boolean = happyEndsAtMs != 0L && System.currentTimeMillis() < happyEndsAtMs
+
+    private fun isHappyIdleAnimationFrame(): Boolean {
+        if (!isHappyIdleActive()) return false
+        val elapsedMs = System.currentTimeMillis() - happyStartedAtMs
+        return ((elapsedMs / 1_000L) % 2L) == 1L
+    }
+
+    private fun isStepPoseActive(): Boolean = stepPoseEndsAtMs != 0L && System.currentTimeMillis() < stepPoseEndsAtMs
+
+    private fun performSingleStep() {
+        if (!acceptsStepProgressOnCurrentScreen() || state.defeat || state.connectMode || state.battlePending) return
+        val now = System.currentTimeMillis()
+        lastStepAtMs = now
+        stepPoseEndsAtMs = now + STEP_POSE_DURATION_MS
         state.steps = (state.steps + 1) % 1_000_000
         if (state.distance > 0) {
             state.distance -= 1
@@ -1636,6 +1733,15 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         saveState()
     }
 
+    private fun triggerStepsInternal(count: Int) {
+        repeat(count.coerceAtLeast(0)) {
+            performSingleStep()
+            if (!acceptsStepProgressOnCurrentScreen() || state.battlePending || screen == Screen.BATTLE) {
+                return
+            }
+        }
+    }
+
     fun toggleAutorun() {
         state.autorun = !state.autorun
         saveState()
@@ -1651,8 +1757,19 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     fun isSoundEnabled(): Boolean = state.soundEnabled
 
     override fun triggerStep() {
-        performStep()
+        triggerStepsInternal(currentStepMultiplier())
     }
+
+    fun triggerRawSteps(count: Int) {
+        triggerStepsInternal(count)
+    }
+
+    fun cycleStepMultiplier(): Int {
+        stepMultiplierIndex = (stepMultiplierIndex + 1) % STEP_MULTIPLIERS.size
+        return currentStepMultiplier()
+    }
+
+    fun currentStepMultiplier(): Int = STEP_MULTIPLIERS[stepMultiplierIndex]
 
     override fun motionInputMode(): GlyphMotionMode {
         return if (screen == Screen.BATTLE && battleSession?.phase in setOf(BattlePhase.PUSH, BattlePhase.READY_GO)) {
@@ -1660,6 +1777,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         } else {
             GlyphMotionMode.DEFAULT
         }
+    }
+
+    override fun acceptsPassiveWalking(): Boolean {
+        return acceptsStepProgressOnCurrentScreen() && !state.defeat && !state.connectMode && !state.battlePending
     }
 
     private fun ensureBattleSessionIfNeeded() {
@@ -1783,11 +1904,6 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         if (playerWon) {
             state.wins += 1
             state.defeat = false
-            state.evoLevel = when {
-                state.wins >= 8 -> 2
-                state.wins >= 3 -> 1
-                else -> 0
-            }
             if (session.boss) {
                 state.areas[state.area.coerceIn(state.areas.indices)] = 2
                 state.perAreaDistances[state.area.coerceIn(state.perAreaDistances.indices)] = state.distance
@@ -1968,7 +2084,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun setBattlePhase(session: BattleSession, phase: BattlePhase) {
         session.phase = phase
         session.phaseStartedAtMs = System.currentTimeMillis()
-        session.hitSoundPlayed = false
+        session.defenseSoundPlayed = false
         session.damageSoundPlayed = false
         if (phase != BattlePhase.MINE_ATTACK) {
             session.pendingEnemyHp = null
@@ -1983,6 +2099,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.ALERT -> playSound(DigiviceAudioManager.Cue.ALERT_OLD)
             BattlePhase.READY_GO -> playSound(DigiviceAudioManager.Cue.READY_GO)
             BattlePhase.EVO_SEQUENCE -> playSound(DigiviceAudioManager.Cue.EVO)
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> playSound(DigiviceAudioManager.Cue.ATTACK)
             BattlePhase.RESULT -> {
                 if (session.resultText == "WIN") {
                     playSound(DigiviceAudioManager.Cue.HAPPY)
@@ -2094,6 +2211,11 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         finishOffsetX = 32
         finishAnimFrame = 1
         finishNextAtMs = System.currentTimeMillis() + 20L
+        finishReturnX = 32
+        finishReturnNextAtMs = 0L
+        happyStartedAtMs = 0L
+        happyEndsAtMs = 0L
+        medicalRecoveryPending = false
         playSound(DigiviceAudioManager.Cue.FINISH)
         screen = Screen.FINISH_GAME
     }
@@ -2120,6 +2242,11 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         finishOffsetX = 32
         finishAnimFrame = 0
         finishNextAtMs = 0L
+        finishReturnX = 32
+        finishReturnNextAtMs = 0L
+        happyStartedAtMs = 0L
+        happyEndsAtMs = 0L
+        medicalRecoveryPending = false
         resetBootSequence()
         battleSession = null
         rescueSession = null
@@ -2161,9 +2288,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             statusDetailPage = statusDetailPage,
             statusBarFrame = currentStatusBarFrame(),
             autorun = state.autorun,
+            stepActive = isStepPoseActive(),
+            happy = isHappyIdleActive(),
+            happyAnimation = isHappyIdleAnimationFrame(),
             defeat = state.defeat,
             battlePending = state.battlePending,
             lastEncounterType = encounterType,
+            finishReturnX = finishReturnX,
             slot = slotSession?.let { session ->
                 PhoneSlotSnapshot(
                     roll1 = session.roll1,
@@ -2345,16 +2476,20 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun drawIdleScreen() {
         val profile = state.currentProfile()
         val encounter = state.lastEncounter ?: calculateMilestone(state.distance, state.steps, state.dpower)
+        val happy = isHappyIdleActive()
+        val happyAnimation = isHappyIdleAnimationFrame()
         drawText(profile.shortCode, 3, 6)
         val spriteName = when {
+            happy && !happyAnimation -> HAPPY_SPRITES[state.currentChar]
             state.defeat -> DEFEAT_SPRITES[state.currentChar]
-            state.autorun && (frameCounter / 8) % 2 == 1 -> STEP_SPRITES[state.currentChar]
+            isStepPoseActive() -> STEP_SPRITES[state.currentChar]
             else -> BASE_SPRITES[state.currentChar]
         }
         drawAssetSprite(spriteName, 14, 7, 10, 10, frameCounter / 8)
         drawText(state.distance.coerceAtLeast(0).toString().padStart(4, '0').takeLast(4), 3, 13)
         drawText("P${state.dpower.toString().padStart(2, '0')}", 3, 19)
         val marker = when {
+            happy && !happyAnimation -> "HAP"
             state.defeat -> "DMG"
             state.battlePending -> "BAT"
             encounter.type == "boss" -> "BOS"
@@ -2401,6 +2536,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun drawCardResultScreen() {
         drawAssetSprite("spr_menu_stats", 0, 5, 25, 16, 0)
         drawText(state.distance.toString(), 11, 13)
+    }
+
+    private fun drawFinishReturnScreen() {
+        drawAssetSprite(BASE_SPRITES[state.currentChar], finishReturnX.coerceIn(0, 32), 7, 10, 10)
     }
 
     private fun drawCardResultSprite(roll: Int, pressed: Boolean, x: Int, animation: Boolean) {
@@ -2666,9 +2805,12 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     private fun drawPhoneIdle(screenRect: RectF) {
         val encounter = state.lastEncounter ?: calculateMilestone(state.distance, state.steps, state.dpower)
+        val happy = isHappyIdleActive()
+        val happyAnimation = isHappyIdleAnimationFrame()
         val spriteName = when {
+            happy && !happyAnimation -> HAPPY_SPRITES[state.currentChar]
             state.defeat -> DEFEAT_SPRITES[state.currentChar]
-            state.autorun && (frameCounter / 8) % 2 == 1 -> STEP_SPRITES[state.currentChar]
+            isStepPoseActive() -> STEP_SPRITES[state.currentChar]
             else -> BASE_SPRITES[state.currentChar]
         }
         drawPhoneAssetSprite(spriteName, screenRect.left.toInt() + 88, screenRect.top.toInt() + 20, 40, 40, frameCounter / 8)
@@ -2677,6 +2819,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         phoneCanvas.drawText("Steps ${state.steps}", screenRect.left + 14f, screenRect.top + 62f, phoneSmallTextPaint)
         phoneCanvas.drawText("D-Power ${state.dpower}", screenRect.left + 14f, screenRect.top + 78f, phoneSmallTextPaint)
         val label = when {
+            happy && !happyAnimation -> "Happy"
             state.battlePending -> "Battle ready"
             encounter.type == "boss" -> "Boss ahead"
             else -> "Walking"
@@ -2693,13 +2836,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     }
 
     private fun drawPhoneStatus(screenRect: RectF) {
-        val evo = state.currentEvolution()
+        val evoIndex = statusDetailPage.coerceIn(0, 2)
+        val evo = state.currentProfile().evolutions[evoIndex]
         phoneCanvas.drawText(state.currentProfile().name, screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
         phoneCanvas.drawText("Form ${evo.name}", screenRect.left + 14f, screenRect.top + 42f, phoneSmallTextPaint)
         phoneCanvas.drawText("Level ${evo.level}", screenRect.left + 14f, screenRect.top + 58f, phoneSmallTextPaint)
         phoneCanvas.drawText("HP ${evo.hp}", screenRect.left + 14f, screenRect.top + 74f, phoneSmallTextPaint)
         phoneCanvas.drawText("ATK ${evo.attack}", screenRect.left + 14f, screenRect.top + 90f, phoneSmallTextPaint)
-        drawPhoneAssetSprite(EVOLUTION_SPRITES[state.currentChar][state.evoLevel.coerceIn(0, 2)], screenRect.left.toInt() + 88, screenRect.top.toInt() + 24, 40, 40, frameCounter / 10)
+        drawPhoneAssetSprite(EVOLUTION_SPRITES[state.currentChar][evoIndex], screenRect.left.toInt() + 88, screenRect.top.toInt() + 24, 40, 40, frameCounter / 10)
     }
 
     private fun drawPhoneMap(screenRect: RectF) {
