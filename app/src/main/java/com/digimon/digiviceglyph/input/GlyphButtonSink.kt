@@ -4,4 +4,5 @@ interface GlyphButtonSink {
     fun onButtonDown(button: GlyphButton)
     fun onButtonUp(button: GlyphButton)
     fun triggerStep()
+    fun motionInputMode(): GlyphMotionMode = GlyphMotionMode.DEFAULT
 }

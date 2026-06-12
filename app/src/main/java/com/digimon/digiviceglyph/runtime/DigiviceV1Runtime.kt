@@ -12,6 +12,7 @@ import android.graphics.RectF
 import android.util.Log
 import com.digimon.digiviceglyph.input.GlyphButton
 import com.digimon.digiviceglyph.input.GlyphButtonSink
+import com.digimon.digiviceglyph.input.GlyphMotionMode
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
@@ -83,7 +84,6 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var pushPress: Int = 0,
         var pushAlarm: Int = 0,
         var evoCharge: Int = 0,
-        var evoAlarm: Int = 0,
         var swapIndex: Int = 0,
         var resultText: String = "",
         var escaped: Boolean = false,
@@ -92,7 +92,34 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var pendingMineHp: Int? = null,
         var pendingEnemyHp: Int? = null,
         var pendingTurn: Int? = null,
-        var hitSoundPlayed: Boolean = false
+        var hitSoundPlayed: Boolean = false,
+        var damageSoundPlayed: Boolean = false
+    )
+
+    internal data class AttackTimelineState(
+        val turn: Int,
+        val posX: Int,
+        val animation: Boolean,
+        val hitTriggered: Boolean,
+        val damageApplied: Boolean,
+        val finished: Boolean
+    )
+
+    internal data class ReadyGoState(
+        val frame: Int,
+        val finished: Boolean
+    )
+
+    internal data class PushState(
+        val remainingTicks: Int,
+        val finished: Boolean
+    )
+
+    internal data class EvoSequenceState(
+        val currentMenu: Int,
+        val animation: Boolean,
+        val posY: Int,
+        val finished: Boolean
     )
 
     private data class RescueSession(
@@ -156,6 +183,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         private const val CARD_DECISION_DELAY_MS = 4000L
         private const val CARD_RESULT_DELAY_MS = 8000L
         private const val CARD_BLINK_MS = 1000L
+        private const val PUSH_ALARM_TICKS = 300
+        private const val PUSH_WINDOW_MS = 10_000L
         private val MENU_ITEMS = listOf("STATE", "MAP", "SLOT", "CARD", "MED", "VS")
         private val BATTLE_ITEMS = listOf("ATK", "EVO", "SWP", "RUN")
         private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
@@ -319,6 +348,170 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 isEnemyCard && pressed -> 1
                 !isEnemyCard && !pressed -> 1
                 else -> -1
+            }
+        }
+
+        internal fun computeAttackTimeline(
+            elapsedMs: Long,
+            currentEvo: Int,
+            boss: Boolean,
+            mineAttack: Boolean
+        ): AttackTimelineState {
+            var remainingMs = elapsedMs.coerceAtLeast(0L)
+            var turn = 0
+            var posX = 0
+            var animation = false
+            var hitTriggered = false
+            var damageApplied = false
+
+            if (remainingMs < 1_000L) {
+                return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied, finished = false)
+            }
+
+            remainingMs -= 1_000L
+            animation = true
+            turn = 1
+
+            val firstStepMs = if (mineAttack) {
+                if (currentEvo > 0) 400L else 200L
+            } else {
+                if (boss) 400L else 200L
+            }
+            val firstTurnIncrement = if (mineAttack) {
+                if (currentEvo > 0) 2 else 1
+            } else {
+                if (boss) 2 else 1
+            }
+
+            while (turn in 1..16 && remainingMs >= firstStepMs) {
+                if (turn == 3) {
+                    hitTriggered = true
+                }
+                posX -= 1
+                turn += firstTurnIncrement
+                if (turn >= 8) {
+                    animation = false
+                }
+                remainingMs -= firstStepMs
+            }
+
+            if (turn == 17 && remainingMs >= 200L) {
+                remainingMs -= 200L
+                turn = 18
+                posX = 0
+            }
+
+            val secondStepMs = if (mineAttack) {
+                if (boss) 400L else 200L
+            } else {
+                if (currentEvo != 0) 400L else 200L
+            }
+            val secondTurnIncrement = if (mineAttack) {
+                if (boss) 2 else 1
+            } else {
+                if (currentEvo != 0) 2 else 1
+            }
+
+            while (turn in 18..36 && remainingMs >= secondStepMs) {
+                posX += if (mineAttack) -1 else 1
+                turn += secondTurnIncrement
+                remainingMs -= secondStepMs
+            }
+
+            while (turn in 37..45 && remainingMs >= 400L) {
+                animation = !animation
+                turn += 1
+                remainingMs -= 400L
+            }
+
+            if (turn == 46 && remainingMs >= 3_000L) {
+                remainingMs -= 3_000L
+                turn = 47
+            }
+            if (turn == 47 && remainingMs >= 3_000L) {
+                remainingMs -= 3_000L
+                damageApplied = true
+                turn = 48
+            }
+            if (turn == 48 && remainingMs >= 3_000L) {
+                turn = 49
+                return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied = true, finished = true)
+            }
+
+            if (turn >= 48) {
+                damageApplied = true
+            }
+
+            return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied, finished = false)
+        }
+
+        internal fun computeReadyGoState(elapsedMs: Long): ReadyGoState {
+            return when {
+                elapsedMs < 6_000L -> ReadyGoState(frame = 0, finished = false)
+                elapsedMs < 12_000L -> ReadyGoState(frame = 1, finished = false)
+                else -> ReadyGoState(frame = 1, finished = true)
+            }
+        }
+
+        internal fun computePushState(elapsedMs: Long): PushState {
+            val clampedElapsedMs = elapsedMs.coerceAtLeast(0L)
+            val finished = clampedElapsedMs >= PUSH_WINDOW_MS
+            val elapsedRatio = (clampedElapsedMs.toDouble() / PUSH_WINDOW_MS.toDouble()).coerceIn(0.0, 1.0)
+            val elapsedTicks = kotlin.math.floor(elapsedRatio * PUSH_ALARM_TICKS).toInt()
+            return PushState(
+                remainingTicks = (PUSH_ALARM_TICKS - elapsedTicks).coerceAtLeast(0),
+                finished = finished
+            )
+        }
+
+        internal fun computeEvoSequenceState(elapsedMs: Long): EvoSequenceState {
+            var remainingMs = elapsedMs.coerceAtLeast(0L)
+            var currentMenu = 0
+            var animation = false
+            var posY = 0
+
+            while (true) {
+                when {
+                    currentMenu < 11 -> {
+                        if (remainingMs < 400L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 400L
+                        currentMenu += 1
+                    }
+                    currentMenu in 11..15 -> {
+                        if (remainingMs < 1_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 1_000L
+                        animation = !animation
+                        currentMenu += 1
+                    }
+                    currentMenu in 16..18 -> {
+                        if (remainingMs < 2_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 2_000L
+                        currentMenu += 1
+                    }
+                    currentMenu in 19..24 -> {
+                        if (remainingMs < 400L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 400L
+                        animation = !animation
+                        currentMenu += 1
+                    }
+                    currentMenu == 25 -> {
+                        if (remainingMs < 2_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 2_000L
+                        currentMenu = 26
+                    }
+                    currentMenu in 26..27 -> {
+                        if (remainingMs < 2_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 2_000L
+                        posY += 4
+                        currentMenu += 1
+                    }
+                    currentMenu == 28 -> {
+                        if (remainingMs < 2_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 2_000L
+                        currentMenu = 29
+                    }
+                    else -> return EvoSequenceState(currentMenu, animation, posY, finished = true)
+                }
             }
         }
     }
@@ -985,21 +1178,21 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 setBattlePhase(session, BattlePhase.MENU)
             }
+            BattlePhase.EVO -> Unit
             BattlePhase.MENU -> {
                 when (BATTLE_ITEMS[session.menuIndex]) {
                     "ATK" -> {
                         playSound(DigiviceAudioManager.Cue.SELECT)
                         setBattlePhase(session, BattlePhase.PUSH)
                         session.pushPress = 0
-                        session.pushAlarm = 150
+                        session.pushAlarm = PUSH_ALARM_TICKS
                     }
                     "EVO" -> {
                         if (canEvolveInBattle(session)) {
                             playSound(DigiviceAudioManager.Cue.SELECT)
                             state.dpower -= evolutionCost(session.currentEvo)
-                            setBattlePhase(session, BattlePhase.EVO)
+                            setBattlePhase(session, BattlePhase.READY_GO)
                             session.evoCharge = 0
-                            session.evoAlarm = 180
                             saveState()
                         } else {
                             playSound(DigiviceAudioManager.Cue.CANCEL)
@@ -1021,20 +1214,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
             BattlePhase.PUSH -> {
-                // A press in PUSH phase does nothing (glyph button disabled)
-                // Flicks (B/C) still increment pushPress
-                playSound(DigiviceAudioManager.Cue.SELECT)
+                addPushPress(session)
             }
-            BattlePhase.EVO -> {
-                playSound(DigiviceAudioManager.Cue.SELECT)
-                val next = session.evoCharge + 1
-                session.evoCharge = if (next > 3) 3 else next
-            }
-            BattlePhase.READY_GO -> {
-                playSound(DigiviceAudioManager.Cue.SELECT)
-                session.evoSuccess = session.evoCharge * 10 > Random.nextInt(0, 101)
-                setBattlePhase(session, BattlePhase.EVO_SEQUENCE)
-            }
+            BattlePhase.READY_GO -> addReadyGoEnergy(session)
             BattlePhase.SWAP -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 commitSwap()
@@ -1062,20 +1244,15 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 session.menuIndex = (session.menuIndex + 1) % BATTLE_ITEMS.size
             }
             BattlePhase.PUSH -> {
-                session.pushPress += 2
-                session.pushAlarm = (session.pushAlarm - 1).coerceAtLeast(0)
+                addPushPress(session)
             }
-            BattlePhase.EVO -> {
-                playSound(DigiviceAudioManager.Cue.SELECT)
-                val next = session.evoCharge + 1
-                session.evoCharge = if (next > 3) 3 else next
-                session.evoAlarm = 180
-            }
+            BattlePhase.READY_GO -> addReadyGoEnergy(session)
+            BattlePhase.EVO -> Unit
             BattlePhase.SWAP -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 session.swapIndex = nextSwappableIndex(session.swapIndex)
             }
-            BattlePhase.READY_GO, BattlePhase.EVO_SEQUENCE -> Unit
+            BattlePhase.EVO_SEQUENCE -> Unit
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.FINISH -> {
                 // No button input during attack
                 playSound(DigiviceAudioManager.Cue.SELECT)
@@ -1107,11 +1284,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.SELECT)
             }
             BattlePhase.PUSH -> {
-                // C does nothing in PUSH — glyph button is disabled
-                playSound(DigiviceAudioManager.Cue.SELECT)
+                addPushPress(session)
             }
             BattlePhase.EVO -> Unit
-            BattlePhase.READY_GO -> Unit
+            BattlePhase.READY_GO -> addReadyGoEnergy(session)
             BattlePhase.SWAP -> {
                 playSound(DigiviceAudioManager.Cue.CANCEL)
                 setBattlePhase(session, BattlePhase.MENU)
@@ -1125,6 +1301,29 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 finalizeBattleResult()
             }
         }
+    }
+
+    private fun addReadyGoEnergy(session: BattleSession) {
+        if (currentReadyGoState(session).finished) return
+        session.evoCharge += Random.nextInt(0, 3)
+        if (session.evoCharge > 10) {
+            session.evoCharge = 3
+        }
+        Log.d(
+            "DigiviceV1Runtime",
+            "READY_GO input accepted evoCharge=${session.evoCharge} phase=${session.phase}"
+        )
+        playSound(DigiviceAudioManager.Cue.SHAKE)
+    }
+
+    private fun addPushPress(session: BattleSession) {
+        if (currentPushState(session).finished) return
+        session.pushPress += 2
+        Log.d(
+            "DigiviceV1Runtime",
+            "PUSH input accepted pushPress=${session.pushPress} remainingTicks=${currentPushState(session).remainingTicks}"
+        )
+        playSound(DigiviceAudioManager.Cue.SHAKE)
     }
 
     private fun maybeAutorun() {
@@ -1212,34 +1411,33 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         if (screen != Screen.BATTLE) return
         when (session.phase) {
             BattlePhase.PUSH -> {
-                if (session.pushAlarm > 0) {
-                    session.pushAlarm -= 1
-                    if (session.pushAlarm <= 0) {
-                        resolvePush()
-                    }
-                }
-            }
-            BattlePhase.EVO -> {
-                if (battlePhaseTicks(session) >= 14) {
-                    beginEvolutionSequence()
+                val pushState = currentPushState(session)
+                session.pushAlarm = pushState.remainingTicks
+                if (pushState.finished) {
+                    resolvePush()
                 }
             }
             BattlePhase.EVO_SEQUENCE -> {
-                if (battlePhaseTicks(session) >= 30) {
+                if (currentEvoSequenceState(session).finished) {
                     completeEvolutionSequence()
                 }
             }
+            BattlePhase.READY_GO -> {
+                if (currentReadyGoState(session).finished) {
+                    beginEvolutionSequence()
+                }
+            }
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
-                val ticks = battlePhaseTicks(session)
-                // Phase 1: Charge (0-30 ticks) — blink animation
-                // Phase 2: Move (30-60 ticks) — sprite moves across
-                // Phase 3: Hit (60-90 ticks) — hit animation
-                if (!session.hitSoundPlayed && ticks >= 60) {
+                val timeline = attackTimeline(session) ?: return
+                if (!session.hitSoundPlayed && timeline.hitTriggered) {
                     session.hitSoundPlayed = true
                     playSound(DigiviceAudioManager.Cue.HIT)
+                }
+                if (!session.damageSoundPlayed && timeline.damageApplied) {
+                    session.damageSoundPlayed = true
                     playSound(DigiviceAudioManager.Cue.SELECT)
                 }
-                if (ticks >= 90) {
+                if (timeline.finished) {
                     completeAttackAnimation()
                 }
             }
@@ -1373,6 +1571,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         performStep()
     }
 
+    override fun motionInputMode(): GlyphMotionMode {
+        return if (screen == Screen.BATTLE && battleSession?.phase in setOf(BattlePhase.PUSH, BattlePhase.READY_GO)) {
+            GlyphMotionMode.MASH_ALL_DIRECTIONS
+        } else {
+            GlyphMotionMode.DEFAULT
+        }
+    }
+
     private fun ensureBattleSessionIfNeeded() {
         if (screen != Screen.BATTLE || !state.battlePending || battleSession != null) return
         val encounter = state.lastEncounter ?: calculateMilestone(state.distance, state.steps, state.dpower)
@@ -1399,7 +1605,12 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun resolvePush() {
         val session = battleSession ?: return
         val chance = session.pushPress * 3
-        if (chance > Random.nextInt(0, 101)) {
+        val roll = Random.nextInt(0, 101)
+        Log.d(
+            "DigiviceV1Runtime",
+            "resolvePush pushPress=${session.pushPress} chance=$chance roll=$roll"
+        )
+        if (chance > roll) {
             startMineAttack()
         } else {
             startEnemyAttack()
@@ -1409,7 +1620,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun beginEvolutionSequence() {
         val session = battleSession ?: return
         session.evoSuccess = session.evoCharge * 10 > Random.nextInt(0, 101)
-        setBattlePhase(session, BattlePhase.READY_GO)
+        setBattlePhase(session, BattlePhase.EVO_SEQUENCE)
     }
 
     private fun commitSwap() {
@@ -1419,6 +1630,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         session.mineHp = state.currentProfile().evolutions.first().hp
         setBattlePhase(session, BattlePhase.PUSH)
         session.pushPress = 0
+        session.pushAlarm = PUSH_ALARM_TICKS
         saveState()
     }
 
@@ -1537,6 +1749,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             session.mineHp = state.currentProfile().evolutions[session.currentEvo].hp
         }
         session.pushPress = 0
+        session.pushAlarm = PUSH_ALARM_TICKS
         setBattlePhase(session, BattlePhase.PUSH)
     }
 
@@ -1674,6 +1887,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         session.phase = phase
         session.phaseStartedAtMs = System.currentTimeMillis()
         session.hitSoundPlayed = false
+        session.damageSoundPlayed = false
         if (phase != BattlePhase.MINE_ATTACK) {
             session.pendingEnemyHp = null
         }
@@ -1685,17 +1899,42 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
         when (phase) {
             BattlePhase.ALERT -> playSound(DigiviceAudioManager.Cue.ALERT_OLD)
-            BattlePhase.EVO -> playSound(DigiviceAudioManager.Cue.EVO_SMALL)
+            BattlePhase.READY_GO -> playSound(DigiviceAudioManager.Cue.READY_GO)
             BattlePhase.EVO_SEQUENCE -> playSound(DigiviceAudioManager.Cue.EVO)
-            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> playSound(DigiviceAudioManager.Cue.READY_GO)
             else -> Unit
         }
+    }
+
+    private fun attackTimeline(session: BattleSession): AttackTimelineState? {
+        val mineAttack = when (session.phase) {
+            BattlePhase.MINE_ATTACK -> true
+            BattlePhase.ENEMY_ATTACK -> false
+            else -> return null
+        }
+        return computeAttackTimeline(
+            elapsedMs = System.currentTimeMillis() - session.phaseStartedAtMs,
+            currentEvo = session.currentEvo,
+            boss = session.boss,
+            mineAttack = mineAttack
+        )
+    }
+
+    private fun currentReadyGoState(session: BattleSession): ReadyGoState {
+        return computeReadyGoState(System.currentTimeMillis() - session.phaseStartedAtMs)
+    }
+
+    private fun currentPushState(session: BattleSession): PushState {
+        return computePushState(System.currentTimeMillis() - session.phaseStartedAtMs)
+    }
+
+    private fun currentEvoSequenceState(session: BattleSession): EvoSequenceState {
+        return computeEvoSequenceState(System.currentTimeMillis() - session.phaseStartedAtMs)
     }
 
     private fun battlePhaseTicks(session: BattleSession): Int {
         val elapsedMs = (System.currentTimeMillis() - session.phaseStartedAtMs).coerceAtLeast(0L)
         val stepMs = when (session.phase) {
-            BattlePhase.EVO -> 120L
+            BattlePhase.READY_GO -> 6_000L
             BattlePhase.EVO_SEQUENCE -> 70L
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> 40L
             BattlePhase.FINISH -> 45L
@@ -1704,16 +1943,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         return (elapsedMs / stepMs).toInt()
     }
 
-    private fun displayedMineHp(session: BattleSession, phaseTicks: Int): Int {
-        return if (session.phase == BattlePhase.ENEMY_ATTACK && phaseTicks >= 47) {
+    private fun displayedMineHp(session: BattleSession, attackTimeline: AttackTimelineState?): Int {
+        return if (session.phase == BattlePhase.ENEMY_ATTACK && attackTimeline?.damageApplied == true) {
             session.pendingMineHp ?: session.mineHp
         } else {
             session.mineHp
         }
     }
 
-    private fun displayedEnemyHp(session: BattleSession, phaseTicks: Int): Int {
-        return if (session.phase == BattlePhase.MINE_ATTACK && phaseTicks >= 47) {
+    private fun displayedEnemyHp(session: BattleSession, attackTimeline: AttackTimelineState?): Int {
+        return if (session.phase == BattlePhase.MINE_ATTACK && attackTimeline?.damageApplied == true) {
             session.pendingEnemyHp ?: session.enemyHp
         } else {
             session.enemyHp
@@ -1848,12 +2087,15 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             },
             battle = battleSession?.let { session ->
                 val phaseTicks = battlePhaseTicks(session)
+                val attackTimeline = attackTimeline(session)
+                val readyGoState = if (session.phase == BattlePhase.READY_GO) currentReadyGoState(session) else null
+                val evoSequenceState = if (session.phase == BattlePhase.EVO_SEQUENCE) currentEvoSequenceState(session) else null
                 PhoneBattleSnapshot(
                     enemyId = session.enemyId,
                     enemyName = session.enemyName,
                     boss = session.boss,
-                    mineHp = displayedMineHp(session, phaseTicks),
-                    enemyHp = displayedEnemyHp(session, phaseTicks),
+                    mineHp = displayedMineHp(session, attackTimeline),
+                    enemyHp = displayedEnemyHp(session, attackTimeline),
                     currentEvo = session.currentEvo,
                     turn = session.pendingTurn ?: session.turn,
                     phase = session.phase.name,
@@ -1863,7 +2105,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                     evoCharge = session.evoCharge,
                     swapIndex = session.swapIndex,
                     evoSuccess = session.evoSuccess,
-                    resultText = session.resultText
+                    resultText = session.resultText,
+                    readyGoFrame = readyGoState?.frame ?: 0,
+                    evoMenu = evoSequenceState?.currentMenu ?: 0,
+                    evoPosY = evoSequenceState?.posY ?: 0,
+                    evoAnimation = evoSequenceState?.animation ?: false,
+                    attackTurn = attackTimeline?.turn ?: 0,
+                    attackPosX = attackTimeline?.posX ?: 0,
+                    attackAnimation = attackTimeline?.animation ?: false
                 )
             },
             rescue = rescueSession?.let { rescue ->
@@ -2104,6 +2353,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 drawAssetSprite("spr_battle_alert_digivice_v1", 2, 9, 20, 7)
                 drawAssetSprite(ATTACK_SPRITES[state.currentChar], 9, 15, 8, 8, frameCounter / 10)
             }
+            BattlePhase.EVO -> Unit
             BattlePhase.MENU -> {
                 drawText(BATTLE_ITEMS[session.menuIndex], 2, 12)
                 drawText("M${session.mineHp}", 2, 19)
@@ -2117,41 +2367,133 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 drawChargeBar(16, 18, session.pushPress / 4)
                 drawAssetSprite(ATTACK_SPRITES[state.currentChar], 11, 8, 10, 10, frameCounter / 6)
             }
-            BattlePhase.EVO -> {
-                drawText("EVO", 4, 11)
-                drawText(session.evoCharge.toString().padStart(2, '0'), 8, 18)
-                drawChargeBar(16, 18, session.evoCharge)
-                drawAssetSprite(EVOLUTION_SPRITES[state.currentChar][(session.currentEvo + 1).coerceAtMost(2)], 14, 8, 10, 10, frameCounter / 10)
-            }
             BattlePhase.READY_GO -> {
-                drawText("READY", 4, 11)
-                drawText(session.evoCharge.toString().padStart(2, '0'), 8, 18)
-                drawChargeBar(16, 18, session.evoCharge)
-                drawAssetSprite(EVOLUTION_SPRITES[state.currentChar][(session.currentEvo + 1).coerceAtMost(2)], 14, 8, 10, 10, frameCounter / 10)
+                drawAssetSprite("spr_ready_go_d3_v1", 0, 8, 25, 16, currentReadyGoState(session).frame.coerceIn(0, 1))
             }
             BattlePhase.EVO_SEQUENCE -> {
-                drawAssetSprite("spr_evo_digivice_v1", 2, 8, 20, 10, battlePhaseTicks(session).coerceAtMost(11))
+                drawEvoSequencePreview(session)
             }
             BattlePhase.SWAP -> {
                 drawText("SWAP", 2, 11)
                 drawText(DigiviceV1State.DIGIMON_PROFILES[session.swapIndex].shortCode, 4, 18)
                 drawAssetSprite(BASE_SPRITES[session.swapIndex], 15, 9, 10, 10, frameCounter / 10)
             }
-            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
-                val ticks = battlePhaseTicks(session)
-                val moveProgress = (ticks / 30f).coerceAtMost(1f)
-                val spriteX = (2 + moveProgress * 9).toInt()
-                val spriteY = (11 - moveProgress * 2).toInt()
-                drawText("ATK", 4, 11)
-                drawAssetSprite(ATTACK_SPRITES[state.currentChar], spriteX, 8, 10, 10, frameCounter / 8)
-                drawAssetSprite(ENEMY_SPRITES[session.enemyId], spriteY, 8, 10, 10, frameCounter / 8)
-            }
+            BattlePhase.MINE_ATTACK -> drawMineAttackPreview(session)
+            BattlePhase.ENEMY_ATTACK -> drawEnemyAttackPreview(session)
             BattlePhase.FINISH, BattlePhase.RESULT -> {
                 drawText(session.resultText, 3, 11)
                 drawText("M${session.mineHp}", 2, 19)
                 drawText("E${session.enemyHp}", 13, 19)
                 val resultSprite = if (session.resultText == "WIN") HAPPY_SPRITES[state.currentChar] else DEFEAT_SPRITES[state.currentChar]
                 drawAssetSprite(resultSprite, 15, 8, 10, 10, frameCounter / 10)
+            }
+        }
+    }
+
+    private fun drawMineAttackPreview(session: BattleSession) {
+        val timeline = attackTimeline(session) ?: return
+        val currentSprite = if (session.currentEvo == 0) ATTACK_SPRITES[state.currentChar] else EVOLUTION_SPRITES[state.currentChar][session.currentEvo]
+        val currentX = if (session.currentEvo == 0) 16 else 8
+        drawText("ATK", 4, 11)
+        when {
+            timeline.turn == 0 -> {
+                drawAssetSprite(currentSprite, currentX, 8, 10, 10, frameCounter / 8)
+            }
+            timeline.turn in 1..17 -> {
+                drawAssetSprite(currentSprite, currentX, 8, 10, 10, frameCounter / 8)
+                val projectileX = if (session.currentEvo == 0) 8 + timeline.posX else timeline.posX
+                drawAssetSprite("spr_attack_digivice_v1", projectileX, 8, 8, 8)
+                if (session.currentEvo != 0) {
+                    drawAssetSprite("spr_attack_digivice_v1", projectileX, 16, 8, 8)
+                }
+            }
+            timeline.turn in 18..34 -> {
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 0, 8, 10, 10)
+                val projectileX = 32 + timeline.posX
+                drawAssetSprite("spr_attack_digivice_v1", projectileX, 8, 8, 8)
+                if (session.currentEvo != 0) {
+                    drawAssetSprite("spr_attack_digivice_v1", projectileX, 16, 8, 8)
+                }
+            }
+            timeline.turn in 35..45 -> {
+                val effect = if (session.boss) "spr_attack_d3_v1" else "spr_attack_d3_v1_small"
+                drawAssetSprite(effect, 0, 8, 16, 16, if (timeline.animation) 1 else 0)
+            }
+            else -> {
+                drawAssetSprite("spr_hp_bar_digivice_v1", 0, 8, 25, 16, displayedEnemyHp(session, timeline).coerceIn(0, 8))
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 4, 8, 10, 10)
+            }
+        }
+    }
+
+    private fun drawEnemyAttackPreview(session: BattleSession) {
+        val timeline = attackTimeline(session) ?: return
+        val currentSprite = if (session.currentEvo == 0) BASE_SPRITES[state.currentChar] else EVOLUTION_SPRITES[state.currentChar][session.currentEvo]
+        val currentX = if (session.currentEvo == 0) 16 else 8
+        drawText("ATK", 4, 11)
+        when {
+            timeline.turn == 0 -> {
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 0, 8, 10, 10, if (timeline.animation) 1 else 0)
+            }
+            timeline.turn in 1..17 -> {
+                drawAssetSprite(ENEMY_SPRITES[session.enemyId], 0, 8, 10, 10, if (timeline.animation) 1 else 0)
+                val projectileX = if (session.boss) 32 - timeline.posX else 24 - timeline.posX
+                drawAssetSpriteMirrored("spr_attack_digivice_v1", projectileX, 8, 8, 8)
+                if (session.boss) {
+                    drawAssetSpriteMirrored("spr_attack_digivice_v1", projectileX, 16, 8, 8)
+                }
+            }
+            timeline.turn in 18..34 -> {
+                drawAssetSprite(currentSprite, currentX, 8, 10, 10)
+                drawAssetSpriteMirrored("spr_attack_digivice_v1", timeline.posX, 8, 8, 8)
+                if (session.boss) {
+                    drawAssetSpriteMirrored("spr_attack_digivice_v1", timeline.posX, 16, 8, 8)
+                }
+            }
+            timeline.turn in 35..45 -> {
+                val effect = if (session.currentEvo != 0) "spr_attack_d3_v1" else "spr_attack_d3_v1_small"
+                val effectX = if (session.currentEvo != 0) 8 else 16
+                drawAssetSprite(effect, effectX, 8, 16, 16, if (timeline.animation) 1 else 0)
+            }
+            else -> {
+                drawAssetSprite("spr_hp_bar_digivice_v1", 0, 8, 25, 16, displayedMineHp(session, timeline).coerceIn(0, 8))
+                drawAssetSprite(currentSprite, currentX, 8, 10, 10)
+            }
+        }
+    }
+
+    private fun drawEvoSequencePreview(session: BattleSession) {
+        val evoState = currentEvoSequenceState(session)
+        val currentSprite = EVOLUTION_SPRITES[this.state.currentChar][session.currentEvo.coerceIn(0, 2)]
+        val nextSprite = EVOLUTION_SPRITES[this.state.currentChar][(session.currentEvo + 1).coerceAtMost(2)]
+        val currentX = if ((spriteLibrary.getFrame(currentSprite, 0)?.width ?: 16) > 16) 4 else 8
+        when {
+            evoState.currentMenu < 11 -> {
+                drawAssetSprite("spr_evo_digivice_v1", 0, 8, 25, 16, evoState.currentMenu.coerceIn(0, 11))
+            }
+            evoState.currentMenu in 11..15 -> {
+                if (!evoState.animation) {
+                    drawAssetSprite(currentSprite, currentX, 8, 16, 16)
+                }
+            }
+            evoState.currentMenu in 16..17 -> {
+                drawAssetSprite(currentSprite, currentX, 8, 16, 16)
+                drawAssetSprite("spr_evo_filter", 0, 8, 25, 16)
+            }
+            evoState.currentMenu in 18..24 -> {
+                if (session.evoSuccess && evoState.currentMenu % 2 == 0) {
+                    drawAssetSprite(nextSprite, 4, 0, 24, 24)
+                } else {
+                    drawAssetSprite(currentSprite, currentX, 8, 16, 16)
+                }
+                drawAssetSprite("spr_evo_filter", 0, 8, 25, 16)
+            }
+            else -> {
+                if (session.evoSuccess) {
+                    drawAssetSprite(nextSprite, 4, evoState.posY, 24, 24)
+                } else {
+                    drawAssetSprite(currentSprite, currentX, 8, 16, 16)
+                }
             }
         }
     }
@@ -2359,6 +2701,34 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             val srcY = (y * srcHeight) / targetHeight
             for (x in 0 until targetWidth) {
                 val srcX = (x * srcWidth) / targetWidth
+                val pixel = sprite.getPixel(srcX, srcY)
+                if (Color.alpha(pixel) > 32) {
+                    setPixel(offsetX + x, offsetY + y)
+                }
+            }
+        }
+    }
+
+    private fun drawAssetSpriteMirrored(name: String, left: Int, top: Int, maxWidth: Int, maxHeight: Int, frameIndex: Int = 0) {
+        val sprite = spriteLibrary.getFrame(name, frameIndex) ?: return
+        val srcWidth = sprite.width
+        val srcHeight = sprite.height
+        if (srcWidth <= 0 || srcHeight <= 0) return
+
+        val scale = minOf(
+            maxWidth.toFloat() / srcWidth.toFloat(),
+            maxHeight.toFloat() / srcHeight.toFloat(),
+            1f
+        )
+        val targetWidth = (srcWidth * scale).roundToInt().coerceAtLeast(1)
+        val targetHeight = (srcHeight * scale).roundToInt().coerceAtLeast(1)
+        val offsetX = left + ((maxWidth - targetWidth) / 2)
+        val offsetY = top + ((maxHeight - targetHeight) / 2)
+
+        for (y in 0 until targetHeight) {
+            val srcY = (y * srcHeight) / targetHeight
+            for (x in 0 until targetWidth) {
+                val srcX = srcWidth - 1 - ((x * srcWidth) / targetWidth)
                 val pixel = sprite.getPixel(srcX, srcY)
                 if (Color.alpha(pixel) > 32) {
                     setPixel(offsetX + x, offsetY + y)

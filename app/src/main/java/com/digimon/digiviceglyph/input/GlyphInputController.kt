@@ -18,10 +18,14 @@ class GlyphInputController(context: Context) : SensorEventListener {
     companion object {
         private const val TAG = "GlyphInput"
         private const val BUTTON_TAP_MS = 90L
+        private const val MASH_TAP_MS = 25L
+        private const val MASH_SAMPLE_LOG_MS = 180L
         private const val FLICK_VIBRATE_MS = 40L
         private const val FLICK_VIBRATE_AMPLITUDE = 180
         private const val ACCEL_SMOOTH_ALPHA = 0.35f
         private const val ACCEL_GRAVITY_ALPHA = 0.82f
+        private const val MASH_TRIGGER_THRESHOLD = 2.35f
+        private const val MASH_REARM_THRESHOLD = 0.95f
     }
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -53,6 +57,10 @@ class GlyphInputController(context: Context) : SensorEventListener {
     private var gravityX = 0f
     private var gravityY = 0f
     private var gravityZ = 0f
+    private var mashArmed = true
+    private var lastMashSignature = 0
+    private var lastMashSampleLogAtMs = 0L
+    private var lastMotionMode = GlyphMotionMode.DEFAULT
 
     private val releaseGlyphChangePulse = Runnable {
         glyphChangePulseDown = false
@@ -122,6 +130,7 @@ class GlyphInputController(context: Context) : SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent) {
+        val nowMs = SystemClock.elapsedRealtime()
         val x: Float
         val y: Float
         val z: Float
@@ -146,8 +155,22 @@ class GlyphInputController(context: Context) : SensorEventListener {
         filteredY += (y - filteredY) * ACCEL_SMOOTH_ALPHA
         filteredZ += (z - filteredZ) * ACCEL_SMOOTH_ALPHA
 
+        val motionMode = sink?.motionInputMode() ?: GlyphMotionMode.DEFAULT
+        if (motionMode != lastMotionMode) {
+            Log.d(TAG, "Motion mode -> $motionMode")
+            lastMotionMode = motionMode
+        }
+
+        if (motionMode == GlyphMotionMode.MASH_ALL_DIRECTIONS) {
+            logMashSample(nowMs, filteredX, filteredY, filteredZ)
+            if (processMashMotion(filteredX, filteredY, filteredZ)) {
+                vibrateFlickConfirm()
+            }
+            return
+        }
+
         val gesture = flickDetector.update(
-            nowMs = SystemClock.elapsedRealtime(),
+            nowMs = nowMs,
             x = filteredX,
             y = filteredY,
             z = filteredZ
@@ -184,20 +207,80 @@ class GlyphInputController(context: Context) : SensorEventListener {
         }
     }
 
-    private fun pressBTap() {
-        if (buttonBActive) return
+    private fun processMashMotion(x: Float, y: Float, z: Float): Boolean {
+        val magnitudeSquared = x * x + y * y + z * z
+        val rearmSquared = MASH_REARM_THRESHOLD * MASH_REARM_THRESHOLD
+        val triggerSquared = MASH_TRIGGER_THRESHOLD * MASH_TRIGGER_THRESHOLD
+        val signature = dominantMashSignature(x, y, z)
+
+        if (magnitudeSquared <= rearmSquared) {
+            if (!mashArmed) {
+                Log.d(TAG, "Mash rearmed magnitude=${"%.2f".format(kotlin.math.sqrt(magnitudeSquared.toDouble()))}")
+            }
+            mashArmed = true
+            lastMashSignature = 0
+            return false
+        }
+        if (!mashArmed && signature != 0 && signature != lastMashSignature) {
+            mashArmed = true
+            Log.d(TAG, "Mash rearmed by direction change old=$lastMashSignature new=$signature")
+        }
+        if (!mashArmed || magnitudeSquared < triggerSquared) {
+            return false
+        }
+
+        mashArmed = false
+        lastMashSignature = signature
+        val magnitude = kotlin.math.sqrt(magnitudeSquared.toDouble())
+        val accepted = pressBTap(MASH_TAP_MS)
+        Log.d(
+            TAG,
+            "Mash accept magnitude=${"%.2f".format(magnitude)} signature=$signature accepted=$accepted buttonBActive=$buttonBActive"
+        )
+        return accepted
+    }
+
+    private fun dominantMashSignature(x: Float, y: Float, z: Float): Int {
+        val absX = kotlin.math.abs(x)
+        val absY = kotlin.math.abs(y)
+        val absZ = kotlin.math.abs(z)
+        return when {
+            absX >= absY && absX >= absZ -> if (x >= 0f) 1 else -1
+            absY >= absX && absY >= absZ -> if (y >= 0f) 2 else -2
+            absZ >= absX && absZ >= absY -> if (z >= 0f) 3 else -3
+            else -> 0
+        }
+    }
+
+    private fun logMashSample(nowMs: Long, x: Float, y: Float, z: Float) {
+        if (nowMs - lastMashSampleLogAtMs < MASH_SAMPLE_LOG_MS) return
+        lastMashSampleLogAtMs = nowMs
+        val magnitude = kotlin.math.sqrt((x * x + y * y + z * z).toDouble())
+        Log.d(
+            TAG,
+            "Mash sample mag=${"%.2f".format(magnitude)} x=${"%.2f".format(x)} y=${"%.2f".format(y)} z=${"%.2f".format(z)} armed=$mashArmed buttonBActive=$buttonBActive"
+        )
+    }
+
+    private fun pressBTap(tapMs: Long = BUTTON_TAP_MS): Boolean {
+        if (buttonBActive) {
+            Log.d(TAG, "pressBTap ignored because B is still active")
+            return false
+        }
         buttonBActive = true
         sink?.onButtonDown(GlyphButton.B)
         mainHandler.removeCallbacks(releaseBTap)
-        mainHandler.postDelayed(releaseBTap, BUTTON_TAP_MS)
+        mainHandler.postDelayed(releaseBTap, tapMs)
+        return true
     }
 
-    private fun pressCTap() {
-        if (buttonCActive) return
+    private fun pressCTap(tapMs: Long = BUTTON_TAP_MS): Boolean {
+        if (buttonCActive) return false
         buttonCActive = true
         sink?.onButtonDown(GlyphButton.C)
         mainHandler.removeCallbacks(releaseCTap)
-        mainHandler.postDelayed(releaseCTap, BUTTON_TAP_MS)
+        mainHandler.postDelayed(releaseCTap, tapMs)
+        return true
     }
 
     private fun releaseAll() {
@@ -222,6 +305,10 @@ class GlyphInputController(context: Context) : SensorEventListener {
         gravityX = 0f
         gravityY = 0f
         gravityZ = 0f
+        mashArmed = true
+        lastMashSignature = 0
+        lastMashSampleLogAtMs = 0L
+        lastMotionMode = GlyphMotionMode.DEFAULT
         flickDetector.reset()
     }
 

@@ -24,7 +24,14 @@ data class PhoneBattleSnapshot(
     val evoCharge: Int,
     val swapIndex: Int,
     val evoSuccess: Boolean,
-    val resultText: String
+    val resultText: String,
+    val readyGoFrame: Int,
+    val evoMenu: Int,
+    val evoPosY: Int,
+    val evoAnimation: Boolean,
+    val attackTurn: Int,
+    val attackPosX: Int,
+    val attackAnimation: Boolean
 )
 
 data class PhoneRescueSnapshot(
@@ -447,8 +454,9 @@ class ExactPhoneRenderer(
             "PUSH" -> {
                 drawContentSprite("spr_battle_push_digivice_v1", 0, 0, (frameCounter / 6) % 2)
             }
-            "EVO" -> {
-                drawContentSprite("spr_ready_go_d3_v1", 0, 0, (battle.phaseTicks / 5).coerceIn(0, 2))
+            "EVO" -> Unit
+            "READY_GO" -> {
+                drawContentSprite("spr_ready_go_d3_v1", 0, 0, battle.readyGoFrame.coerceIn(0, 1))
             }
             "EVO_SEQUENCE" -> drawEvoSequence(snapshot, battle)
             "SWAP" -> {
@@ -509,60 +517,61 @@ class ExactPhoneRenderer(
     }
 
     private fun drawMineAttack(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
-        val ticks = battle.phaseTicks
         val currentSprite = if (battle.currentEvo == 0) ATTACK_SPRITES[snapshot.currentChar] else EVOLUTION_SPRITES[snapshot.currentChar][battle.currentEvo]
         val currentX = if (battle.currentEvo == 0) 16 else 8
         when {
-            ticks == 0 -> drawContentSprite(currentSprite, currentX, 0)
-            ticks in 1..17 -> {
+            battle.attackTurn == 0 -> drawContentSprite(currentSprite, currentX, 0)
+            battle.attackTurn in 1..17 -> {
                 drawContentSprite(currentSprite, currentX, 0)
-                val attackX = if (battle.currentEvo == 0) 8 - (ticks - 1) else -(ticks - 1)
+                val attackX = if (battle.currentEvo == 0) 8 + battle.attackPosX else battle.attackPosX
                 drawContentSprite("spr_attack_digivice_v1", attackX, 0)
                 if (battle.currentEvo != 0) {
                     drawContentSprite("spr_attack_digivice_v1", attackX, 8)
                 }
             }
-            ticks in 18..34 -> {
-                drawEnemySprite(ENEMY_SPRITES[battle.enemyId])
-                drawContentSprite("spr_attack_digivice_v1", 32 - (ticks - 18), 0)
+            battle.attackTurn in 18..34 -> {
+                drawContentSprite(ENEMY_SPRITES[battle.enemyId], 0, 0)
+                val attackX = 32 + battle.attackPosX
+                drawContentSprite("spr_attack_digivice_v1", attackX, 0)
+                if (battle.currentEvo != 0) {
+                    drawContentSprite("spr_attack_digivice_v1", attackX, 8)
+                }
             }
-            ticks in 35..45 -> {
+            battle.attackTurn in 35..45 -> {
                 val effect = if (battle.boss) "spr_attack_d3_v1" else "spr_attack_d3_v1_small"
-                drawContentSprite(effect, 0, 0, (ticks / 2) % 2)
+                drawContentSprite(effect, 0, 0, if (battle.attackAnimation) 1 else 0)
             }
             else -> {
                 drawContentSprite("spr_hp_bar_digivice_v1", 0, 0, battle.enemyHp.coerceIn(0, 8))
-                drawEnemySprite(ENEMY_SPRITES[battle.enemyId])
+                drawContentSprite(ENEMY_SPRITES[battle.enemyId], 4, 0)
             }
         }
     }
 
     private fun drawEnemyAttack(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
-        val ticks = battle.phaseTicks
         val currentSprite = if (battle.currentEvo == 0) BASE_SPRITES[snapshot.currentChar] else EVOLUTION_SPRITES[snapshot.currentChar][battle.currentEvo]
         val currentX = if (battle.currentEvo == 0) 16 else 8
         when {
-            ticks == 0 -> drawEnemySprite(ENEMY_SPRITES[battle.enemyId], 1)
-            ticks in 1..17 -> {
-                drawEnemySprite(ENEMY_SPRITES[battle.enemyId], 1)
-                val projectileX = (if (battle.boss) 32 else 24) + (ticks - 1)
+            battle.attackTurn == 0 -> drawContentSprite(ENEMY_SPRITES[battle.enemyId], 0, 0, if (battle.attackAnimation) 1 else 0)
+            battle.attackTurn in 1..17 -> {
+                drawContentSprite(ENEMY_SPRITES[battle.enemyId], 0, 0, if (battle.attackAnimation) 1 else 0)
+                val projectileX = if (battle.boss) 32 - battle.attackPosX else 24 - battle.attackPosX
                 drawContentSpriteMirrored("spr_attack_digivice_v1", projectileX, 0)
                 if (battle.boss) {
                     drawContentSpriteMirrored("spr_attack_digivice_v1", projectileX, 8)
                 }
             }
-            ticks in 18..34 -> {
+            battle.attackTurn in 18..34 -> {
                 drawContentSprite(currentSprite, currentX, 0)
-                val projectileX = ticks - 18
-                drawContentSpriteMirrored("spr_attack_digivice_v1", projectileX, 0)
-                if (battle.currentEvo != 0) {
-                    drawContentSpriteMirrored("spr_attack_digivice_v1", projectileX, 8)
+                drawContentSpriteMirrored("spr_attack_digivice_v1", battle.attackPosX, 0)
+                if (battle.boss) {
+                    drawContentSpriteMirrored("spr_attack_digivice_v1", battle.attackPosX, 8)
                 }
             }
-            ticks in 35..45 -> {
+            battle.attackTurn in 35..45 -> {
                 val effect = if (battle.currentEvo != 0) "spr_attack_d3_v1" else "spr_attack_d3_v1_small"
                 val effectX = if (battle.currentEvo != 0) 8 else 16
-                drawContentSprite(effect, effectX, 0, (ticks / 2) % 2)
+                drawContentSprite(effect, effectX, 0, if (battle.attackAnimation) 1 else 0)
             }
             else -> {
                 drawContentSprite("spr_hp_bar_digivice_v1", 0, 0, battle.mineHp.coerceIn(0, 8))
@@ -572,23 +581,22 @@ class ExactPhoneRenderer(
     }
 
     private fun drawEvoSequence(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
-        val ticks = battle.phaseTicks
         val currentSprite = EVOLUTION_SPRITES[snapshot.currentChar][battle.currentEvo.coerceIn(0, 2)]
         val nextSprite = EVOLUTION_SPRITES[snapshot.currentChar][(battle.currentEvo + 1).coerceAtMost(2)]
         val currentX = if (spriteWidth(currentSprite) > 16) 4 else 8
         when {
-            ticks < 11 -> drawContentSprite("spr_evo_digivice_v1", 0, 0, ticks.coerceIn(0, 11))
-            ticks < 16 -> {
-                if (ticks % 2 == 0) {
+            battle.evoMenu < 11 -> drawContentSprite("spr_evo_digivice_v1", 0, 0, battle.evoMenu.coerceIn(0, 11))
+            battle.evoMenu in 11..15 -> {
+                if (!battle.evoAnimation) {
                     drawContentSprite(currentSprite, currentX, 0)
                 }
             }
-            ticks < 19 -> {
+            battle.evoMenu in 16..17 -> {
                 drawContentSprite(currentSprite, currentX, 0)
                 drawContentSprite("spr_evo_filter", 0, 0)
             }
-            ticks < 25 -> {
-                if (ticks % 2 == 0 && battle.evoSuccess) {
+            battle.evoMenu in 18..24 -> {
+                if (battle.evoMenu % 2 == 0 && battle.evoSuccess) {
                     drawContentSprite(nextSprite, 4, -8)
                 } else {
                     drawContentSprite(currentSprite, currentX, 0)
@@ -597,8 +605,7 @@ class ExactPhoneRenderer(
             }
             else -> {
                 if (battle.evoSuccess) {
-                    val evoY = -8 + ((ticks - 25).coerceAtMost(2) * 4)
-                    drawContentSprite(nextSprite, 4, evoY)
+                    drawContentSprite(nextSprite, 4, -8 + battle.evoPosY)
                 } else {
                     drawContentSprite(currentSprite, currentX, 0)
                 }
