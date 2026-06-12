@@ -47,6 +47,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         SWAP,
         MINE_ATTACK,
         ENEMY_ATTACK,
+        DEVOLVE,
         FINISH,
         RESULT
     }
@@ -119,6 +120,22 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         val currentMenu: Int,
         val animation: Boolean,
         val posY: Int,
+        val finished: Boolean
+    )
+
+    internal data class FinishDevolveState(
+        val displayedEvo: Int,
+        val drawFilter: Boolean,
+        val finished: Boolean
+    )
+
+    internal data class FinishSlideState(
+        val posX: Int,
+        val finished: Boolean
+    )
+
+    internal data class ResultBlinkState(
+        val animation: Boolean,
         val finished: Boolean
     )
 
@@ -513,6 +530,58 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                     else -> return EvoSequenceState(currentMenu, animation, posY, finished = true)
                 }
             }
+        }
+
+        internal fun computeFinishDevolveState(elapsedMs: Long, currentEvo: Int): FinishDevolveState {
+            if (currentEvo <= 0) {
+                return FinishDevolveState(displayedEvo = 0, drawFilter = false, finished = true)
+            }
+
+            var remainingMs = elapsedMs.coerceAtLeast(0L)
+            val stages = listOf(
+                Triple(1_000L, currentEvo, false),
+                Triple(1_000L, currentEvo, true),
+                Triple(1_000L, currentEvo, false),
+                Triple(4_000L, currentEvo, true),
+                Triple(500L, 0, true),
+                Triple(500L, currentEvo, true),
+                Triple(500L, 0, true),
+                Triple(500L, currentEvo, true),
+                Triple(500L, 0, false),
+                Triple(500L, 0, true),
+                Triple(500L, 0, false),
+                Triple(500L, 0, true),
+                Triple(500L, 0, false),
+                Triple(500L, 0, true),
+                Triple(500L, 0, false)
+            )
+
+            for ((durationMs, displayedEvo, drawFilter) in stages) {
+                if (remainingMs < durationMs) {
+                    return FinishDevolveState(displayedEvo, drawFilter, finished = false)
+                }
+                remainingMs -= durationMs
+            }
+
+            return FinishDevolveState(displayedEvo = 0, drawFilter = false, finished = true)
+        }
+
+        internal fun computeFinishSlideState(elapsedMs: Long): FinishSlideState {
+            val clampedElapsedMs = elapsedMs.coerceAtLeast(0L)
+            val steps = (clampedElapsedMs / 100L).toInt().coerceAtMost(24)
+            return FinishSlideState(
+                posX = 32 - steps,
+                finished = steps >= 24
+            )
+        }
+
+        internal fun computeResultBlinkState(elapsedMs: Long, playerWon: Boolean): ResultBlinkState {
+            val durationMs = if (playerWon) 8_000L else 9_000L
+            if (elapsedMs >= durationMs) {
+                return ResultBlinkState(animation = false, finished = true)
+            }
+            val animation = ((elapsedMs / 1_000L) % 2L) == 1L
+            return ResultBlinkState(animation = animation, finished = false)
         }
     }
 
@@ -1221,7 +1290,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.SELECT)
                 commitSwap()
             }
-            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
+            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.DEVOLVE -> {
                 // No button input during attack
                 playSound(DigiviceAudioManager.Cue.SELECT)
             }
@@ -1253,7 +1322,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 session.swapIndex = nextSwappableIndex(session.swapIndex)
             }
             BattlePhase.EVO_SEQUENCE -> Unit
-            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.FINISH -> {
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.DEVOLVE, BattlePhase.FINISH -> {
                 // No button input during attack
                 playSound(DigiviceAudioManager.Cue.SELECT)
             }
@@ -1292,7 +1361,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 playSound(DigiviceAudioManager.Cue.CANCEL)
                 setBattlePhase(session, BattlePhase.MENU)
             }
-            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
+            BattlePhase.EVO_SEQUENCE, BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK, BattlePhase.DEVOLVE -> {
                 // No button input during attack
                 playSound(DigiviceAudioManager.Cue.SELECT)
             }
@@ -1422,6 +1491,11 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                     completeEvolutionSequence()
                 }
             }
+            BattlePhase.DEVOLVE -> {
+                if (currentFinishDevolveState(session).finished) {
+                    setBattlePhase(session, BattlePhase.FINISH)
+                }
+            }
             BattlePhase.READY_GO -> {
                 if (currentReadyGoState(session).finished) {
                     beginEvolutionSequence()
@@ -1442,7 +1516,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
             BattlePhase.FINISH -> {
-                if (battlePhaseTicks(session) >= 25) {
+                if (currentFinishSlideState(session).finished) {
+                    if (session.resultText == "ESC") {
+                        finalizeBattleResult()
+                    } else {
+                        setBattlePhase(session, BattlePhase.RESULT)
+                    }
+                }
+            }
+            BattlePhase.RESULT -> {
+                if (currentResultBlinkState(session).finished) {
                     finalizeBattleResult()
                 }
             }
@@ -1638,17 +1721,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         val session = battleSession ?: return
         state.battlePending = false
         state.eventPending = false
-        session.escaped = true
         if (!session.boss && Random.nextInt(0, 100) < 20) {
+            session.escaped = true
             session.resultText = "ESC"
             state.defeat = false
         } else {
+            session.escaped = false
             session.resultText = "FAIL"
-            state.distance += 500
-            state.dpower = (state.dpower - 2).coerceAtLeast(0)
-            state.defeat = Random.nextBoolean()
         }
-        state.lastEncounter = calculateMilestone(state.distance, state.steps, state.dpower)
         setBattlePhase(session, BattlePhase.FINISH)
         saveState()
     }
@@ -1701,7 +1781,6 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         state.eventPending = false
         val playerWon = session.resultText == "WIN"
         if (playerWon) {
-            playSound(DigiviceAudioManager.Cue.HAPPY)
             state.wins += 1
             state.defeat = false
             state.evoLevel = when {
@@ -1720,7 +1799,6 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
         } else {
-            playSound(DigiviceAudioManager.Cue.SAD)
             state.distance += 500
             state.dpower = (state.dpower - 2).coerceAtLeast(0)
             state.defeat = Random.nextBoolean()
@@ -1762,7 +1840,11 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         session.pendingEnemyHp = null
         session.pendingTurn = null
         if (session.resultText.isNotEmpty()) {
-            setBattlePhase(session, BattlePhase.FINISH)
+            if (session.currentEvo > 0) {
+                setBattlePhase(session, BattlePhase.DEVOLVE)
+            } else {
+                setBattlePhase(session, BattlePhase.FINISH)
+            }
         } else {
             session.menuIndex = 0
             session.resultText = ""
@@ -1901,6 +1983,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.ALERT -> playSound(DigiviceAudioManager.Cue.ALERT_OLD)
             BattlePhase.READY_GO -> playSound(DigiviceAudioManager.Cue.READY_GO)
             BattlePhase.EVO_SEQUENCE -> playSound(DigiviceAudioManager.Cue.EVO)
+            BattlePhase.RESULT -> {
+                if (session.resultText == "WIN") {
+                    playSound(DigiviceAudioManager.Cue.HAPPY)
+                } else if (session.resultText != "ESC") {
+                    playSound(DigiviceAudioManager.Cue.SAD)
+                }
+            }
             else -> Unit
         }
     }
@@ -1931,13 +2020,33 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         return computeEvoSequenceState(System.currentTimeMillis() - session.phaseStartedAtMs)
     }
 
+    private fun currentFinishDevolveState(session: BattleSession): FinishDevolveState {
+        return computeFinishDevolveState(
+            elapsedMs = System.currentTimeMillis() - session.phaseStartedAtMs,
+            currentEvo = session.currentEvo
+        )
+    }
+
+    private fun currentFinishSlideState(session: BattleSession): FinishSlideState {
+        return computeFinishSlideState(System.currentTimeMillis() - session.phaseStartedAtMs)
+    }
+
+    private fun currentResultBlinkState(session: BattleSession): ResultBlinkState {
+        return computeResultBlinkState(
+            elapsedMs = System.currentTimeMillis() - session.phaseStartedAtMs,
+            playerWon = session.resultText == "WIN"
+        )
+    }
+
     private fun battlePhaseTicks(session: BattleSession): Int {
         val elapsedMs = (System.currentTimeMillis() - session.phaseStartedAtMs).coerceAtLeast(0L)
         val stepMs = when (session.phase) {
             BattlePhase.READY_GO -> 6_000L
             BattlePhase.EVO_SEQUENCE -> 70L
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> 40L
-            BattlePhase.FINISH -> 45L
+            BattlePhase.DEVOLVE -> 500L
+            BattlePhase.FINISH -> 100L
+            BattlePhase.RESULT -> 1_000L
             else -> 100L
         }
         return (elapsedMs / stepMs).toInt()
@@ -2090,6 +2199,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 val attackTimeline = attackTimeline(session)
                 val readyGoState = if (session.phase == BattlePhase.READY_GO) currentReadyGoState(session) else null
                 val evoSequenceState = if (session.phase == BattlePhase.EVO_SEQUENCE) currentEvoSequenceState(session) else null
+                val finishDevolveState = if (session.phase == BattlePhase.DEVOLVE) currentFinishDevolveState(session) else null
+                val finishSlideState = if (session.phase == BattlePhase.FINISH) currentFinishSlideState(session) else null
+                val resultBlinkState = if (session.phase == BattlePhase.RESULT) currentResultBlinkState(session) else null
                 PhoneBattleSnapshot(
                     enemyId = session.enemyId,
                     enemyName = session.enemyName,
@@ -2110,6 +2222,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                     evoMenu = evoSequenceState?.currentMenu ?: 0,
                     evoPosY = evoSequenceState?.posY ?: 0,
                     evoAnimation = evoSequenceState?.animation ?: false,
+                    finishEvo = finishDevolveState?.displayedEvo ?: 0,
+                    finishFilter = finishDevolveState?.drawFilter ?: false,
+                    finishSlideX = finishSlideState?.posX ?: 8,
+                    resultAnimation = resultBlinkState?.animation ?: false,
                     attackTurn = attackTimeline?.turn ?: 0,
                     attackPosX = attackTimeline?.posX ?: 0,
                     attackAnimation = attackTimeline?.animation ?: false
@@ -2373,6 +2489,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.EVO_SEQUENCE -> {
                 drawEvoSequencePreview(session)
             }
+            BattlePhase.DEVOLVE -> {
+                drawFinishDevolvePreview(session)
+            }
             BattlePhase.SWAP -> {
                 drawText("SWAP", 2, 11)
                 drawText(DigiviceV1State.DIGIMON_PROFILES[session.swapIndex].shortCode, 4, 18)
@@ -2380,13 +2499,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             }
             BattlePhase.MINE_ATTACK -> drawMineAttackPreview(session)
             BattlePhase.ENEMY_ATTACK -> drawEnemyAttackPreview(session)
-            BattlePhase.FINISH, BattlePhase.RESULT -> {
-                drawText(session.resultText, 3, 11)
-                drawText("M${session.mineHp}", 2, 19)
-                drawText("E${session.enemyHp}", 13, 19)
-                val resultSprite = if (session.resultText == "WIN") HAPPY_SPRITES[state.currentChar] else DEFEAT_SPRITES[state.currentChar]
-                drawAssetSprite(resultSprite, 15, 8, 10, 10, frameCounter / 10)
-            }
+            BattlePhase.FINISH -> drawFinishBattlePreview(session)
+            BattlePhase.RESULT -> drawResultBattlePreview(session)
         }
     }
 
@@ -2499,6 +2613,34 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
     }
 
+    private fun drawFinishDevolvePreview(session: BattleSession) {
+        val finishState = currentFinishDevolveState(session)
+        val spriteName = EVOLUTION_SPRITES[state.currentChar][finishState.displayedEvo.coerceIn(0, 2)]
+        val x = if (finishState.displayedEvo == 0) 15 else 11
+        val size = if (finishState.displayedEvo == 0) 10 else 14
+        drawAssetSprite(spriteName, x, 8, size, 10)
+        if (finishState.drawFilter) {
+            drawAssetSprite("spr_evo_filter", 0, 8, 25, 16)
+        }
+    }
+
+    private fun drawFinishBattlePreview(session: BattleSession) {
+        val finishState = currentFinishSlideState(session)
+        drawAssetSprite(BASE_SPRITES[state.currentChar], finishState.posX.coerceIn(0, 25), 8, 10, 10)
+    }
+
+    private fun drawResultBattlePreview(session: BattleSession) {
+        val blinkState = currentResultBlinkState(session)
+        val playerWon = session.resultText == "WIN"
+        val spriteName = if (playerWon) HAPPY_SPRITES[state.currentChar] else DEFEAT_SPRITES[state.currentChar]
+        val visibleSprite = if (blinkState.animation) BASE_SPRITES[state.currentChar] else spriteName
+        drawAssetSprite(visibleSprite, 15, 8, 10, 10)
+        if (playerWon && !blinkState.animation) {
+            drawAssetSprite("spr_happy", 0, 8, 8, 8)
+        }
+        drawText(session.resultText, 3, 19)
+    }
+
     private fun drawRescueScreen() {
         val rescue = rescueSession ?: return
         val profile = DigiviceV1State.DIGIMON_PROFILES[rescue.charIndex]
@@ -2593,6 +2735,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.EVO -> "Charge ${session.evoCharge}"
             BattlePhase.READY_GO -> "READY ${session.evoCharge}"
             BattlePhase.EVO_SEQUENCE -> "EVOLVE"
+            BattlePhase.DEVOLVE -> "DEVOLVE"
             BattlePhase.SWAP -> "Swap ${DigiviceV1State.DIGIMON_PROFILES[session.swapIndex].name}"
             BattlePhase.MINE_ATTACK -> "ATTACK"
             BattlePhase.ENEMY_ATTACK -> "DAMAGE"

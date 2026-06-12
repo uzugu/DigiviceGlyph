@@ -85,4 +85,43 @@ class DigiviceV1BattleTimingTest {
         assertTrue(afterDamage.damageApplied)
         assertTrue(afterDamage.turn >= 48)
     }
+
+    @Test
+    fun finishDevolveFlashesCurrentFormBeforeSettlingOnBaseForm() {
+        val opening = DigiviceV1Runtime.computeFinishDevolveState(elapsedMs = 0L, currentEvo = 2)
+        val longFlash = DigiviceV1Runtime.computeFinishDevolveState(elapsedMs = 6_500L, currentEvo = 2)
+        val baseFlash = DigiviceV1Runtime.computeFinishDevolveState(elapsedMs = 8_100L, currentEvo = 2)
+        val finished = DigiviceV1Runtime.computeFinishDevolveState(elapsedMs = 13_000L, currentEvo = 2)
+
+        assertEquals(2, opening.displayedEvo)
+        assertFalse(opening.drawFilter)
+        assertTrue(longFlash.drawFilter)
+        assertEquals(0, baseFlash.displayedEvo)
+        assertTrue(finished.finished)
+    }
+
+    @Test
+    fun finishSlideMatchesOriginalTwoPointFourSecondReturnToBasePosition() {
+        val opening = DigiviceV1Runtime.computeFinishSlideState(0L)
+        val midpoint = DigiviceV1Runtime.computeFinishSlideState(1_200L)
+        val finished = DigiviceV1Runtime.computeFinishSlideState(2_400L)
+
+        assertEquals(32, opening.posX)
+        assertEquals(20, midpoint.posX)
+        assertEquals(8, finished.posX)
+        assertTrue(finished.finished)
+    }
+
+    @Test
+    fun resultBlinkStartsOnHappyOrDefeatSpriteAndEndsAfterOriginalDelay() {
+        val winOpening = DigiviceV1Runtime.computeResultBlinkState(0L, playerWon = true)
+        val winSecond = DigiviceV1Runtime.computeResultBlinkState(1_200L, playerWon = true)
+        val winFinished = DigiviceV1Runtime.computeResultBlinkState(8_000L, playerWon = true)
+        val loseFinished = DigiviceV1Runtime.computeResultBlinkState(9_000L, playerWon = false)
+
+        assertFalse(winOpening.animation)
+        assertTrue(winSecond.animation)
+        assertTrue(winFinished.finished)
+        assertTrue(loseFinished.finished)
+    }
 }

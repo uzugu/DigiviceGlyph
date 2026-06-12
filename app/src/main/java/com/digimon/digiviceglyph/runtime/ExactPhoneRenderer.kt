@@ -29,6 +29,10 @@ data class PhoneBattleSnapshot(
     val evoMenu: Int,
     val evoPosY: Int,
     val evoAnimation: Boolean,
+    val finishEvo: Int,
+    val finishFilter: Boolean,
+    val finishSlideX: Int,
+    val resultAnimation: Boolean,
     val attackTurn: Int,
     val attackPosX: Int,
     val attackAnimation: Boolean
@@ -478,13 +482,15 @@ class ExactPhoneRenderer(
                 drawContentSprite("spr_ready_go_d3_v1", 0, 0, battle.readyGoFrame.coerceIn(0, 1))
             }
             "EVO_SEQUENCE" -> drawEvoSequence(snapshot, battle)
+            "DEVOLVE" -> drawFinishDevolve(snapshot, battle)
             "SWAP" -> {
                 drawContentSprite("spr_battle_card", 0, 0)
                 drawContentSprite(ATTACK_SPRITES[battle.swapIndex], 8, 0, frameCounter / 8)
             }
             "MINE_ATTACK" -> drawMineAttack(snapshot, battle)
             "ENEMY_ATTACK" -> drawEnemyAttack(snapshot, battle)
-            "FINISH", "RESULT" -> drawBattleFinish(snapshot, battle)
+            "FINISH" -> drawBattleFinish(snapshot, battle)
+            "RESULT" -> drawBattleResult(snapshot, battle)
         }
     }
 
@@ -633,9 +639,30 @@ class ExactPhoneRenderer(
         }
     }
 
+    private fun drawFinishDevolve(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
+        val spriteName = EVOLUTION_SPRITES[snapshot.currentChar][battle.finishEvo.coerceIn(0, 2)]
+        val x = if (battle.finishEvo == 0) 8 else 4
+        drawContentSprite(spriteName, x, 0)
+        if (battle.finishFilter) {
+            drawContentSprite("spr_evo_filter", 0, 0)
+        }
+    }
+
     private fun drawBattleFinish(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
-        val slideX = 32 - battle.phaseTicks.coerceAtMost(24)
-        drawContentSprite(BASE_SPRITES[snapshot.currentChar], slideX, 0)
+        drawContentSprite(BASE_SPRITES[snapshot.currentChar], battle.finishSlideX, 0)
+    }
+
+    private fun drawBattleResult(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
+        val playerWon = battle.resultText == "WIN"
+        val spriteName = if (playerWon) HAPPY_SPRITES[snapshot.currentChar] else DEFEAT_SPRITES[snapshot.currentChar]
+        if (battle.resultAnimation) {
+            drawContentSprite(BASE_SPRITES[snapshot.currentChar], 8, 0)
+        } else {
+            drawContentSprite(spriteName, 8, 0)
+            if (playerWon) {
+                drawContentSprite("spr_happy", 24, 0)
+            }
+        }
     }
 
     private fun renderGlyphBattleHp(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot, frameCounter: Int): Bitmap {
