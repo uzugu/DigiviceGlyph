@@ -67,15 +67,15 @@ class DigiviceV1BattleTimingTest {
     }
 
     @Test
-    fun attackDamageAppliesOnlyAfterSecondThreeSecondWait() {
+    fun attackDamageAppliesAfterFasterOneSecondHpDropWait() {
         val beforeDamage = DigiviceV1Runtime.computeAttackTimeline(
-            elapsedMs = 15_000L,
+            elapsedMs = 13_000L,
             currentEvo = 0,
             boss = false,
             mineAttack = true
         )
         val afterDamage = DigiviceV1Runtime.computeAttackTimeline(
-            elapsedMs = 18_500L,
+            elapsedMs = 13_900L,
             currentEvo = 0,
             boss = false,
             mineAttack = true

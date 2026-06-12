@@ -424,16 +424,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 remainingMs -= 400L
             }
 
-            if (turn == 46 && remainingMs >= 3_000L) {
-                remainingMs -= 3_000L
+            if (turn == 46 && remainingMs >= 1_000L) {
+                remainingMs -= 1_000L
                 turn = 47
             }
-            if (turn == 47 && remainingMs >= 3_000L) {
-                remainingMs -= 3_000L
+            if (turn == 47 && remainingMs >= 1_000L) {
+                remainingMs -= 1_000L
                 damageApplied = true
                 turn = 48
             }
-            if (turn == 48 && remainingMs >= 3_000L) {
+            if (turn == 48 && remainingMs >= 1_000L) {
                 turn = 49
                 return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied = true, finished = true)
             }
@@ -656,7 +656,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         maybeAdvanceBattleAnimations()
         maybeAdvanceRescueSequence()
         maybeAdvanceFinishSequence()
-        return exactPhoneRenderer.renderContent(buildPhoneSnapshot(), frameCounter)
+        return exactPhoneRenderer.renderGlyphContent(buildPhoneSnapshot(), frameCounter)
     }
 
     private fun handleConfirm() {
@@ -2394,13 +2394,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         val timeline = attackTimeline(session) ?: return
         val currentSprite = if (session.currentEvo == 0) ATTACK_SPRITES[state.currentChar] else EVOLUTION_SPRITES[state.currentChar][session.currentEvo]
         val currentX = if (session.currentEvo == 0) 16 else 8
+        val attackFrame = if (timeline.animation) 1 else 0
         drawText("ATK", 4, 11)
         when {
             timeline.turn == 0 -> {
-                drawAssetSprite(currentSprite, currentX, 8, 10, 10, frameCounter / 8)
+                drawAssetSprite(currentSprite, currentX, 8, 10, 10, attackFrame)
             }
             timeline.turn in 1..17 -> {
-                drawAssetSprite(currentSprite, currentX, 8, 10, 10, frameCounter / 8)
+                drawAssetSprite(currentSprite, currentX, 8, 10, 10, attackFrame)
                 val projectileX = if (session.currentEvo == 0) 8 + timeline.posX else timeline.posX
                 drawAssetSprite("spr_attack_digivice_v1", projectileX, 8, 8, 8)
                 if (session.currentEvo != 0) {

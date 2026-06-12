@@ -113,6 +113,10 @@ class ExactPhoneRenderer(
         private const val PHONE_HEIGHT = 160
         private const val CONTENT_WIDTH = 32
         private const val CONTENT_HEIGHT = 16
+        private const val GLYPH_SIZE = 25
+        private const val GLYPH_SPRITE_LUMA_THRESHOLD = 160
+        private const val GLYPH_CROP_LEFT = (CONTENT_WIDTH - GLYPH_SIZE) / 2
+        private const val GLYPH_CONTENT_TOP = 5
 
         private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
         private val ATTACK_SPRITES = arrayOf("spr_agu_attack", "spr_gabu_attack", "spr_biyo_attack", "spr_pal_attack", "spr_tento_attack", "spr_goma_attack", "spr_pata_attack", "spr_gato_attack")
@@ -187,6 +191,8 @@ class ExactPhoneRenderer(
     private val phoneCanvas = Canvas(phoneBitmap)
     private val contentBitmap = Bitmap.createBitmap(CONTENT_WIDTH, CONTENT_HEIGHT, Bitmap.Config.ARGB_8888)
     private val contentCanvas = Canvas(contentBitmap)
+    private val glyphBitmap = Bitmap.createBitmap(GLYPH_SIZE, GLYPH_SIZE, Bitmap.Config.ARGB_8888)
+    private val glyphCanvas = Canvas(glyphBitmap)
     private val shellPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#0D1611")
         style = Paint.Style.FILL
@@ -267,6 +273,19 @@ class ExactPhoneRenderer(
             "RESCUE" -> drawRescue(snapshot)
         }
         return contentBitmap
+    }
+
+    fun renderGlyphContent(snapshot: PhoneVisualSnapshot, frameCounter: Int): Bitmap {
+        val battle = snapshot.battle
+        if (
+            snapshot.screen == "BATTLE" &&
+            battle != null &&
+            battle.phase in setOf("MINE_ATTACK", "ENEMY_ATTACK") &&
+            battle.attackTurn >= 46
+        ) {
+            return renderGlyphBattleHp(snapshot, battle, frameCounter)
+        }
+        return renderContent(snapshot, frameCounter)
     }
 
     private fun drawBoot(snapshot: PhoneVisualSnapshot, frameCounter: Int) {
@@ -519,10 +538,11 @@ class ExactPhoneRenderer(
     private fun drawMineAttack(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
         val currentSprite = if (battle.currentEvo == 0) ATTACK_SPRITES[snapshot.currentChar] else EVOLUTION_SPRITES[snapshot.currentChar][battle.currentEvo]
         val currentX = if (battle.currentEvo == 0) 16 else 8
+        val attackFrame = if (battle.attackAnimation) 1 else 0
         when {
-            battle.attackTurn == 0 -> drawContentSprite(currentSprite, currentX, 0)
+            battle.attackTurn == 0 -> drawContentSprite(currentSprite, currentX, 0, attackFrame)
             battle.attackTurn in 1..17 -> {
-                drawContentSprite(currentSprite, currentX, 0)
+                drawContentSprite(currentSprite, currentX, 0, attackFrame)
                 val attackX = if (battle.currentEvo == 0) 8 + battle.attackPosX else battle.attackPosX
                 drawContentSprite("spr_attack_digivice_v1", attackX, 0)
                 if (battle.currentEvo != 0) {
@@ -616,6 +636,57 @@ class ExactPhoneRenderer(
     private fun drawBattleFinish(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot) {
         val slideX = 32 - battle.phaseTicks.coerceAtMost(24)
         drawContentSprite(BASE_SPRITES[snapshot.currentChar], slideX, 0)
+    }
+
+    private fun renderGlyphBattleHp(snapshot: PhoneVisualSnapshot, battle: PhoneBattleSnapshot, frameCounter: Int): Bitmap {
+        glyphCanvas.drawColor(Color.WHITE)
+
+        val hpValue: Int
+        if (battle.phase == "MINE_ATTACK") {
+            hpValue = battle.enemyHp.coerceIn(0, 8)
+        } else {
+            hpValue = battle.mineHp.coerceIn(0, 8)
+        }
+
+        renderContent(snapshot, frameCounter)
+        srcRect.set(GLYPH_CROP_LEFT, 0, GLYPH_CROP_LEFT + GLYPH_SIZE, CONTENT_HEIGHT)
+        dstRect.set(0, GLYPH_CONTENT_TOP, GLYPH_SIZE, GLYPH_CONTENT_TOP + CONTENT_HEIGHT)
+        glyphCanvas.drawBitmap(contentBitmap, srcRect, dstRect, bitmapPaint)
+        drawGlyphHpOrbs(hpValue)
+        return glyphBitmap
+    }
+
+    private fun drawGlyphHpOrbs(hpValue: Int) {
+        val filledOrbs = hpValue.coerceIn(0, 8)
+        val orbCenters = arrayOf(
+            12 to 1,
+            18 to 3,
+            22 to 8,
+            22 to 15,
+            12 to 22,
+            3 to 15,
+            2 to 8,
+            6 to 3
+        )
+
+        orbCenters.forEachIndexed { index, (cx, cy) ->
+            drawGlyphOrb(cx, cy, filled = index < filledOrbs)
+        }
+    }
+
+    private fun drawGlyphOrb(cx: Int, cy: Int, filled: Boolean) {
+        glyphBitmap.setPixel(cx, cy, Color.BLACK)
+        if (!filled) return
+
+        val cluster = arrayOf(
+            cx to cy,
+            (cx + 1).coerceAtMost(GLYPH_SIZE - 1) to cy,
+            cx to (cy + 1).coerceAtMost(GLYPH_SIZE - 1),
+            (cx + 1).coerceAtMost(GLYPH_SIZE - 1) to (cy + 1).coerceAtMost(GLYPH_SIZE - 1)
+        )
+        for ((x, y) in cluster) {
+            glyphBitmap.setPixel(x, y, Color.BLACK)
+        }
     }
 
     private fun drawNumberSprite(value: Int, x: Int, y: Int) {
