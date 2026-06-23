@@ -145,11 +145,13 @@ class MainActivity : AppCompatActivity() {
         updateSoundButton()
         updateStepMultiplierButton()
         previewView.setBitmap(runtime.renderPhoneFrame())
+        consumeEncounterNotificationLaunch(intent)
         maybeEnsureWalkingServiceOnOpen()
     }
 
     override fun onResume() {
         super.onResume()
+        runtime.cancelEncounterNotification()
         updateGlyphStatus()
         updateAutorunButton()
         updateIdleClockButton()
@@ -161,6 +163,12 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         previewHandler.removeCallbacks(previewTicker)
+        runtime.scheduleEncounterNotification()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        consumeEncounterNotificationLaunch(intent)
     }
 
     private fun startPreviewService(showToast: Boolean = true) {
@@ -257,5 +265,27 @@ class MainActivity : AppCompatActivity() {
             }
         }
         button.setOnClickListener { _: View -> }
+    }
+
+    private fun consumeEncounterNotificationLaunch(intent: Intent?) {
+        if (intent?.getBooleanExtra(EncounterNotifications.EXTRA_LAUNCHED_FROM_NOTIFICATION, false) != true) {
+            return
+        }
+        val encounter = EncounterNotifications.readEncounter(intent) ?: return
+        runtime.launchEncounterFromNotification(
+            encounter.type,
+            encounter.distance,
+            encounter.steps,
+            encounter.energy,
+            encounter.area
+        )
+        previewView.setBitmap(runtime.renderPhoneFrame())
+        intent.removeExtra(EncounterNotifications.EXTRA_LAUNCHED_FROM_NOTIFICATION)
+        intent.removeExtra(EncounterNotifications.EXTRA_ENCOUNTER_DATA)
+        intent.removeExtra(EncounterNotifications.EXTRA_ENCOUNTER_TYPE)
+        intent.removeExtra(EncounterNotifications.EXTRA_DISTANCE)
+        intent.removeExtra(EncounterNotifications.EXTRA_STEPS)
+        intent.removeExtra(EncounterNotifications.EXTRA_ENERGY)
+        intent.removeExtra(EncounterNotifications.EXTRA_AREA)
     }
 }

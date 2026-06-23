@@ -39,6 +39,7 @@ data class DigiviceV1State(
     var eventPending: Boolean = false,
     var connectMode: Boolean = false,
     var autorun: Boolean = false,
+    var notificationsEnabled: Boolean = true,
     var area: Int = 0,
     var areas: IntArray = intArrayOf(1, 1, 1, 1, 1, 1, 1),
     var perAreaDistances: IntArray = intArrayOf(10000, 12000, 14000, 16000, 18000, 20000, 22000),

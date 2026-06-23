@@ -10,6 +10,7 @@ import android.graphics.PorterDuffColorFilter
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Log
+import com.digimon.digiviceglyph.EncounterNotifications
 import com.digimon.digiviceglyph.input.GlyphButton
 import com.digimon.digiviceglyph.input.GlyphButtonSink
 import com.digimon.digiviceglyph.input.GlyphMotionMode
@@ -17,6 +18,7 @@ import kotlin.math.roundToInt
 import kotlin.random.Random
 
 class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
+    private val appContext: Context = context.applicationContext
     private enum class Screen {
         BOOT,
         SELECT,
@@ -836,10 +838,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     }
     private val phoneSrcRect = Rect()
     private val phoneDstRect = Rect()
-    private val saveRepository = DigiviceV1SaveRepository(context.applicationContext)
-    private val spriteLibrary = GlyphSpriteLibrary(context.applicationContext)
+    private val saveRepository = DigiviceV1SaveRepository(appContext)
+    private val spriteLibrary = GlyphSpriteLibrary(appContext)
     private val exactPhoneRenderer = ExactPhoneRenderer(spriteLibrary)
-    private val audioManager = DigiviceAudioManager(context.applicationContext)
+    private val audioManager = DigiviceAudioManager(appContext)
 
     private var state: DigiviceV1State = saveRepository.load() ?: DigiviceV1State().also {
         it.lastEncounter = calculateMilestone(it.distance, it.steps, it.dpower)
@@ -1954,6 +1956,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         if (state.distance == 0 || state.steps % 500 == 0) {
             state.battlePending = true
             battleSession = null
+            cancelEncounterNotification()
             playSound(DigiviceAudioManager.Cue.SHAKE)
             screen = Screen.BATTLE
         }
@@ -3300,6 +3303,88 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         phoneSrcRect.set(0, 0, srcWidth, srcHeight)
         phoneDstRect.set(left, top, left + targetWidth, top + targetHeight)
         phoneCanvas.drawBitmap(sprite, phoneSrcRect, phoneDstRect, phoneSpritePaint)
+    }
+
+    // -- Encounter notification scheduling --
+
+    data class ScheduledEncounter(
+        val type: String,
+        val stepsRemaining: Int,
+        val distance: Int,
+        val steps: Int,
+        val energy: Int,
+        val area: Int
+    )
+
+    fun scheduleEncounterNotification() {
+        val next = nextScheduledEncounter() ?: run {
+            cancelEncounterNotification()
+            return
+        }
+        if (next.stepsRemaining == 0) {
+            EncounterNotifications.post(appContext, next.type, next.distance, next.steps, next.energy, next.area)
+            return
+        }
+        EncounterNotifications.schedule(appContext, next.stepsRemaining, next.type, next.distance, next.steps, next.energy, next.area)
+    }
+
+    fun cancelEncounterNotification() {
+        EncounterNotifications.cancel(appContext)
+    }
+
+    fun launchEncounterFromNotification(type: String, distance: Int, steps: Int, energy: Int, area: Int) {
+        cancelEncounterNotification()
+        if (state.defeat || state.battlePending || state.eventPending) return
+        state.startSequencePending = false
+        if (screen == Screen.BOOT) {
+            screen = Screen.IDLE
+        }
+        state.distance = distance.coerceAtLeast(0)
+        state.steps = steps.coerceAtLeast(0)
+        state.dpower = energy.coerceIn(0, 99)
+        state.area = area.coerceIn(0, 6)
+        val encounterType = when (type) {
+            "boss" -> "boss"
+            else -> "battle"
+        }
+        if (encounterType == "boss") {
+            state.battlePending = true
+            battleSession = null
+            screen = Screen.BATTLE
+        }
+        saveState()
+    }
+
+    private fun nextScheduledEncounter(): ScheduledEncounter? {
+        if (!state.notificationsEnabled || state.defeat || state.battlePending || state.eventPending || state.startSequencePending) {
+            return null
+        }
+
+        val candidates = mutableListOf<ScheduledEncounter>()
+
+        // boss at distance 0
+        if (state.distance == 0) {
+            candidates += ScheduledEncounter("boss", 0, 0, state.steps, state.dpower, state.area)
+        } else {
+            // boss at distance 0 (remaining steps = state.distance)
+            val futureEnergy = (state.dpower + (state.distance / 100)).coerceAtMost(99)
+            candidates += ScheduledEncounter(
+                "boss", state.distance, 0, state.steps + state.distance, futureEnergy, state.area
+            )
+
+            // periodic battle every 500 steps
+            val stepRemainder = state.steps % 500
+            val stepsToPeriodic = if (stepRemainder == 0) 500 else 500 - stepRemainder
+            if (stepsToPeriodic in 1 until state.distance) {
+                val periodicSteps = state.steps + stepsToPeriodic
+                val periodicEnergy = (state.dpower + (stepsToPeriodic / 100)).coerceAtMost(99)
+                candidates += ScheduledEncounter(
+                    "battle", stepsToPeriodic, state.distance - stepsToPeriodic, periodicSteps, periodicEnergy, state.area
+                )
+            }
+        }
+
+        return candidates.minByOrNull { it.stepsRemaining }
     }
 
     private fun drawText(text: String, left: Int, top: Int) {

@@ -37,6 +37,10 @@
             </intent-filter>
         </activity>
 
+        <receiver
+            android:name=".EncounterNotificationReceiver"
+            android:exported="false" />
+
         <service
             android:name=".DigiviceGlyphToyService"
             android:exported="true"
