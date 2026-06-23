@@ -846,6 +846,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private var state: DigiviceV1State = saveRepository.load() ?: DigiviceV1State().also {
         it.lastEncounter = calculateMilestone(it.distance, it.steps, it.dpower)
     }
+    init {
+        audioManager.setSoundStyle(DigiviceAudioManager.SoundStyle.fromKey(state.soundStyle))
+    }
     private var screen: Screen =
         if (state.startSequencePending) Screen.BOOT else if (state.battlePending) Screen.BATTLE else Screen.IDLE
     private var selectedChar = state.currentChar
@@ -1985,6 +1988,19 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     }
 
     fun isSoundEnabled(): Boolean = state.soundEnabled
+
+    fun cycleSoundStyle(): String {
+        val nextStyle = DigiviceAudioManager.SoundStyle.fromKey(state.soundStyle).let { current ->
+            val idx = DigiviceAudioManager.SoundStyle.entries.indexOf(current)
+            DigiviceAudioManager.SoundStyle.entries[(idx + 1) % DigiviceAudioManager.SoundStyle.entries.size]
+        }
+        state.soundStyle = nextStyle.key
+        audioManager.setSoundStyle(nextStyle)
+        saveState()
+        return state.soundStyle
+    }
+
+    fun currentSoundStyle(): String = state.soundStyle
 
     fun toggleIdleClock() {
         idleClockEnabled = !idleClockEnabled

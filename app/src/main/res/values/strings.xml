@@ -37,4 +37,5 @@
     <string name="encounter_notification_event">An event has been found!</string>
     <string name="encounter_notification_boss">Something is approaching!</string>
     <string name="encounter_notification_text">Distance: %1$d Step: %2$d Energy: %3$d</string>
+    <string name="sound_style_original">Sound Style: Original</string>
 </resources>

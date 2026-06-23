@@ -132,6 +132,13 @@
             android:text="@string/sound_toggle_off" />
 
         <Button
+            android:id="@+id/btnSoundStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/sound_style_original" />
+
+        <Button
             android:id="@+id/btnStepMultiplier"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

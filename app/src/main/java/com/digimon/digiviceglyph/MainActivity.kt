@@ -27,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnAutoRun: Button
     private lateinit var btnIdleClock: Button
     private lateinit var btnSound: Button
+    private lateinit var btnSoundStyle: Button
     private lateinit var btnStepMultiplier: Button
     private lateinit var btnWalk490: Button
     private lateinit var runtime: DigiviceV1Runtime
@@ -85,6 +86,7 @@ class MainActivity : AppCompatActivity() {
         btnAutoRun = findViewById(R.id.btnAutoRun)
         btnIdleClock = findViewById(R.id.btnIdleClock)
         btnSound = findViewById(R.id.btnSound)
+        btnSoundStyle = findViewById(R.id.btnSoundStyle)
         btnStepMultiplier = findViewById(R.id.btnStepMultiplier)
         btnWalk490 = findViewById(R.id.btnWalk490)
 
@@ -132,6 +134,10 @@ class MainActivity : AppCompatActivity() {
             updateSoundButton()
             previewView.setBitmap(runtime.renderPhoneFrame())
         }
+        btnSoundStyle.setOnClickListener {
+            runtime.cycleSoundStyle()
+            updateSoundStyleButton()
+        }
         btnStepMultiplier.setOnClickListener {
             runtime.cycleStepMultiplier()
             updateStepMultiplierButton()
@@ -143,6 +149,7 @@ class MainActivity : AppCompatActivity() {
         updateAutorunButton()
         updateIdleClockButton()
         updateSoundButton()
+        updateSoundStyleButton()
         updateStepMultiplierButton()
         previewView.setBitmap(runtime.renderPhoneFrame())
         consumeEncounterNotificationLaunch(intent)
@@ -236,6 +243,15 @@ class MainActivity : AppCompatActivity() {
     private fun updateIdleClockButton() {
         btnIdleClock.text = getString(
             if (runtime.isIdleClockEnabled()) R.string.idle_clock_toggle_on else R.string.idle_clock_toggle_off
+        )
+    }
+
+    private fun updateSoundStyleButton() {
+        btnSoundStyle.text = getString(
+            when (runtime.currentSoundStyle()) {
+                "original" -> R.string.sound_style_original
+                else -> R.string.sound_style_original
+            }
         )
     }
 

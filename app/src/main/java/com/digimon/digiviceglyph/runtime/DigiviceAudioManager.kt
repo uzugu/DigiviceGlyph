@@ -13,6 +13,15 @@ class DigiviceAudioManager(private val context: Context) {
         private const val TAG = "DigiviceAudio"
     }
 
+    enum class SoundStyle(val key: String, val assetDir: String) {
+        ORIGINAL("original", "audio");
+
+        companion object {
+            fun fromKey(key: String): SoundStyle =
+                entries.firstOrNull { it.key.equals(key, ignoreCase = true) } ?: ORIGINAL
+        }
+    }
+
     enum class Cue(
         val assetName: String,
         val minGapMs: Long = 50L,
@@ -54,6 +63,7 @@ class DigiviceAudioManager(private val context: Context) {
     private val lastPlayedAt = mutableMapOf<Cue, Long>()
     private val activeStreams = linkedSetOf<Int>()
     private var mediaPlayer: MediaPlayer? = null
+    private var soundStyle = SoundStyle.ORIGINAL
 
     init {
         soundPool.setOnLoadCompleteListener { _, sampleId, status ->
@@ -64,21 +74,46 @@ class DigiviceAudioManager(private val context: Context) {
                 Log.w(TAG, "Failed to load sampleId=$sampleId status=$status")
             }
         }
+        loadCueAssets()
+    }
 
+    fun setSoundStyle(style: SoundStyle) {
+        if (style == soundStyle) return
+        stopAll()
+        soundIds.values.forEach { sampleId ->
+            runCatching { soundPool.unload(sampleId) }
+        }
+        soundIds.clear()
+        loadedIds.clear()
+        activeStreams.clear()
+        soundStyle = style
+        loadCueAssets()
+        Log.d(TAG, "Switched sound style to ${style.key}")
+    }
+
+    fun currentSoundStyle(): SoundStyle = soundStyle
+
+    private fun loadCueAssets() {
         for (cue in Cue.values()) {
             if (cue.preferMediaPlayer) continue
             runCatching {
-                Log.d(TAG, "Loading ${cue.assetName}...")
-                context.assets.openFd("audio/${cue.assetName}").use { fd ->
+                Log.d(TAG, "Loading ${cue.assetName} for style ${soundStyle.key}...")
+                openCueAssetFd(cue).use { fd ->
                     soundIds[cue] = soundPool.load(fd, 1)
                 }
             }.onFailure { error ->
-                Log.w(TAG, "Failed to queue ${cue.assetName}", error)
+                Log.w(TAG, "Failed to queue ${cue.assetName} for ${soundStyle.key}", error)
             }
         }
-
-        Log.d(TAG, "All sounds queued. Loaded count=${loadedIds.size}/${soundIds.size}")
+        Log.d(TAG, "All sounds queued for ${soundStyle.key}. Loaded count=${loadedIds.size}/${soundIds.size}")
     }
+
+    private fun openCueAssetFd(cue: Cue): AssetFileDescriptor =
+        runCatching { context.assets.openFd("${soundStyle.assetDir}/${cue.assetName}") }
+            .getOrNull()
+            ?: runCatching { context.assets.openFd("audio/${cue.assetName}") }
+                .getOrNull()
+            ?: error("Missing asset for cue ${cue.name}: ${cue.assetName}")
 
     fun play(cue: Cue, enabled: Boolean) {
         if (!enabled) {
@@ -136,7 +171,10 @@ class DigiviceAudioManager(private val context: Context) {
         mediaPlayer = null
 
         runCatching {
-            context.assets.openFd("audio/${cue.assetName}").use { fd ->
+            val path = "${soundStyle.assetDir}/${cue.assetName}"
+            val fd = runCatching { context.assets.openFd(path) }.getOrNull()
+                ?: context.assets.openFd("audio/${cue.assetName}")
+            fd.use {
                 MediaPlayer().apply {
                     setDataSource(fd.fileDescriptor, fd.startOffset, fd.length)
                     isLooping = false

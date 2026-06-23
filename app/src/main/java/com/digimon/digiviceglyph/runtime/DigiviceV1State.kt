@@ -24,6 +24,7 @@ data class EvolutionProfile(
 data class DigiviceV1State(
     var startSequencePending: Boolean = true,
     var soundEnabled: Boolean = true,
+    var soundStyle: String = "original",
     var gridEnabled: Boolean = false,
     var scale: Int = 0,
     var vista: Int = 0,
