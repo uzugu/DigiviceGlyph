@@ -36,7 +36,10 @@ data class PhoneBattleSnapshot(
     val resultAnimation: Boolean,
     val attackTurn: Int,
     val attackPosX: Int,
-    val attackAnimation: Boolean
+    val attackAnimation: Boolean,
+    val startBlinkVisible: Boolean,
+    val startSlideX: Int,
+    val startSlideY: Int
 )
 
 data class PhoneRescueSnapshot(
@@ -127,11 +130,33 @@ class ExactPhoneRenderer(
         private const val GLYPH_SPRITE_LUMA_THRESHOLD = 160
         private const val GLYPH_CROP_LEFT = (CONTENT_WIDTH - GLYPH_SIZE) / 2
         private const val GLYPH_CONTENT_TOP = 4
-        private const val GLYPH_CLOCK_DIGIT_WIDTH = 4
+        private const val GLYPH_CLOCK_DIGIT_WIDTH = 3
         private const val GLYPH_CLOCK_DIGIT_HEIGHT = 4
         private const val GLYPH_CLOCK_DIGIT_GAP = 1
         private const val GLYPH_CLOCK_TOP = 0
         private const val GLYPH_CLOCK_BOTTOM = 21
+        private val GLYPH_CLOCK_DIGITS = arrayOf(
+            // 0
+            arrayOf("010", "101", "010", "000"),
+            // 1
+            arrayOf("100", "010", "010", "000"),
+            // 2
+            arrayOf("110", "010", "011", "000"),
+            // 3
+            arrayOf("111", "011", "111", "000"),
+            // 4
+            arrayOf("101", "111", "001", "000"),
+            // 5
+            arrayOf("011", "010", "110", "000"),
+            // 6
+            arrayOf("100", "111", "111", "000"),
+            // 7
+            arrayOf("111", "001", "001", "000"),
+            // 8
+            arrayOf("011", "111", "110", "000"),
+            // 9
+            arrayOf("111", "111", "001", "000")
+        )
 
         private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
         private val ATTACK_SPRITES = arrayOf("spr_agu_attack", "spr_gabu_attack", "spr_biyo_attack", "spr_pal_attack", "spr_tento_attack", "spr_goma_attack", "spr_pata_attack", "spr_gato_attack")
@@ -239,6 +264,10 @@ class ExactPhoneRenderer(
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         isFilterBitmap = false
         isDither = false
+    }
+    private val glyphRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        isFilterBitmap = false
+        style = Paint.Style.FILL
     }
     private val srcRect = Rect()
     private val dstRect = Rect()
@@ -498,6 +527,11 @@ class ExactPhoneRenderer(
                 }
                 drawContentSprite(ATTACK_SPRITES[snapshot.currentChar], 8, 0, frameCounter / 8)
             }
+            "START" -> {
+                if (battle.startBlinkVisible) {
+                    drawContentSprite(ENEMY_SPRITES[battle.enemyId], battle.startSlideX, battle.startSlideY)
+                }
+            }
             "MENU" -> {
                 drawContentSprite("spr_battle_menu_digivice_v1", 0, 0, battle.menuIndex)
             }
@@ -727,10 +761,21 @@ class ExactPhoneRenderer(
     }
 
     private fun drawGlyphClockDigit(digit: Int, x: Int, y: Int) {
-        val sprite = spriteLibrary.getFrame("spr_numbers", digit.coerceIn(0, 9)) ?: return
-        srcRect.set(0, 0, sprite.width, sprite.height)
-        dstRect.set(x, y, x + GLYPH_CLOCK_DIGIT_WIDTH, y + GLYPH_CLOCK_DIGIT_HEIGHT)
-        glyphCanvas.drawBitmap(sprite, srcRect, dstRect, bitmapPaint)
+        val pattern = GLYPH_CLOCK_DIGITS[digit.coerceIn(0, 9)]
+        glyphRingPaint.color = Color.BLACK
+        pattern.forEachIndexed { row, rowPattern ->
+            rowPattern.forEachIndexed { col, cell ->
+                if (cell == '1') {
+                    glyphCanvas.drawRect(
+                        (x + col).toFloat(),
+                        (y + row).toFloat(),
+                        (x + col + 1).toFloat(),
+                        (y + row + 1).toFloat(),
+                        glyphRingPaint
+                    )
+                }
+            }
+        }
     }
 
     private fun drawGlyphHpOrbs(hpValue: Int) {

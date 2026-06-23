@@ -42,6 +42,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     internal enum class BattlePhase {
         ALERT,
+        START,
         MENU,
         PUSH,
         EVO,
@@ -140,6 +141,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     internal data class ResultBlinkState(
         val animation: Boolean,
+        val finished: Boolean
+    )
+
+    internal data class StartBlinkState(
+        val blinkVisible: Boolean,
+        val slideX: Int,
+        val slideY: Int,
         val finished: Boolean
     )
 
@@ -418,8 +426,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             animation = true
             turn = 1
 
+            // GML mine_attack turno 1-16: depends on current_evo only (alarm 6/12, turno++/+=2)
+            // GML enemy_attack turno 1-16: depends on boss only (alarm 6/12, turno++/+=2)
             val firstStepTicks = if ((mineAttack && currentEvo > 0) || (boss && !mineAttack)) 4 else 2
-            val firstTurnIncrement = if ((mineAttack && currentEvo > 0) || boss) 2 else 1
+            val firstTurnIncrement = if ((mineAttack && currentEvo > 0) || (boss && !mineAttack)) 2 else 1
 
             while (turn in 1..16 && remaining >= firstStepTicks) {
                 if (turn == 3) hitTriggered = true
@@ -452,7 +462,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 remaining -= animTicks
             }
 
-            val pauseTicks = (1_000L / VIRTUAL_TICK_MS).toInt() // 10
+            // GML turno 46: alarm[0]=90 frames = 3.0s → 30 ticks
+            // GML turno 47: alarm[0]=90 frames = 3.0s → 30 ticks, applies damage
+            // GML turno 48: sets alarm[0]=90 but destroys self immediately — no pause
+            val pauseTicks = (3_000L / VIRTUAL_TICK_MS).toInt() // 30
             if (turn == 46 && remaining >= pauseTicks) {
                 remaining -= pauseTicks
                 turn = 47
@@ -462,10 +475,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 damageApplied = true
                 turn = 48
             }
-            if (turn == 48 && remaining >= pauseTicks) {
+            if (turn >= 48) {
+                damageApplied = true
                 return AttackTimelineState(49, posX, animation, hitTriggered, damageApplied = true, finished = true)
             }
-            if (turn >= 48) damageApplied = true
 
             return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied, finished = false)
         }
@@ -593,6 +606,68 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             return ResultBlinkState(blink, finished = false)
         }
 
+        /* ---- START phase: enemy blink / slide-in before menu ---- */
+
+        internal fun startBlinkStateForTick(tick: Int, boss: Boolean): StartBlinkState {
+            if (boss) {
+                return startSlideStateForTick(tick)
+            }
+            // 16px enemy — matches GML alarms at 30fps converted to 10Hz ticks (1 tick = 100ms):
+            //   alarm[0] = 5  frames  →  blink toggle every ~2 ticks  (5/30 * 10 ≈ 2)
+            //   alarm[1] = 30 frames  →  stop blink at tick 10       (30/30 * 10 = 10)
+            //   alarm[2] = 60 frames  →  first fire at tick 20, then every 10 ticks
+            //                          →  counter reaches 2 at tick 30 → transition
+            val blinkVisible = if (tick < 10) {
+                // blink toggle every 2 ticks until alarm[1] stops it at tick 10
+                (tick / 2) % 2 == 0
+            } else {
+                // after tick 10, alarm[0] = -1, animation stays true (visible)
+                true
+            }
+            return StartBlinkState(
+                blinkVisible = blinkVisible,
+                slideX = 0,
+                slideY = 0,
+                finished = tick >= 30
+            )
+        }
+
+        private fun startSlideStateForTick(tick: Int): StartBlinkState {
+            // 24px boss — matches GML alarm[3] slide + alarm[4] transition at 30fps → 10Hz:
+            //   x-slide: -16→-1 in 15 steps×3fr = 45fr (1.5s → 15 ticks),
+            //            -1→0 in 1 step×30fr = 30fr (1.0s → 10 ticks)  total x = 25 ticks
+            //   y-slide: -8→-4 in 30fr (1.0s → 10 ticks),
+            //            -4→0 in 30fr (1.0s → 10 ticks)  total y = 20 ticks, done at tick 45
+            //   then alarm[4] = 60 frames (2.0s → 20 ticks), counter=1 at tick 65 → transition
+
+            // X-slide phase: ticks 0-24
+            if (tick < 15) {
+                // fast x-slide: -16→-1, 15 steps, 1 tick each
+                val slideX = -16 + tick
+                return StartBlinkState(blinkVisible = true, slideX = slideX, slideY = -8, finished = false)
+            } else if (tick < 25) {
+                // slow pause at x=-1→0 (alarm[3] = 30), stay at -1 until tick 25
+                return StartBlinkState(blinkVisible = true, slideX = -1, slideY = -8, finished = false)
+            }
+
+            // Y-slide phase: ticks 25-44
+            if (tick < 35) {
+                // y = -8, stay here 10 ticks
+                return StartBlinkState(blinkVisible = true, slideX = 0, slideY = -8, finished = false)
+            } else if (tick < 45) {
+                // y = -4, stay here 10 ticks
+                return StartBlinkState(blinkVisible = true, slideX = 0, slideY = -4, finished = false)
+            }
+
+            // Post-slide: enemy visible at (0,0), transition at tick 65
+            return StartBlinkState(
+                blinkVisible = true,
+                slideX = 0,
+                slideY = 0,
+                finished = tick >= 65
+            )
+        }
+
         internal fun computeAttackTimeline(
             elapsedMs: Long,
             currentEvo: Int,
@@ -666,22 +741,21 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 remainingMs -= 400L
             }
 
-            if (turn == 46 && remainingMs >= 1_000L) {
-                remainingMs -= 1_000L
+            // GML turno 46: alarm[0]=90 frames = 3.0s
+            // GML turno 47: alarm[0]=90 frames = 3.0s, applies damage
+            // GML turno 48: immediate transition (alarm set but self destroyed before fire)
+            if (turn == 46 && remainingMs >= 3_000L) {
+                remainingMs -= 3_000L
                 turn = 47
             }
-            if (turn == 47 && remainingMs >= 1_000L) {
-                remainingMs -= 1_000L
+            if (turn == 47 && remainingMs >= 3_000L) {
+                remainingMs -= 3_000L
                 damageApplied = true
                 turn = 48
             }
-            if (turn == 48 && remainingMs >= 1_000L) {
-                turn = 49
-                return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied = true, finished = true)
-            }
-
             if (turn >= 48) {
                 damageApplied = true
+                return AttackTimelineState(49, posX, animation, hitTriggered, damageApplied = true, finished = true)
             }
 
             return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied, finished = false)
@@ -1501,6 +1575,11 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         when (session.phase) {
             BattlePhase.ALERT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
+                setBattlePhase(session, BattlePhase.START)
+            }
+            BattlePhase.START -> {
+                // early exit to menu if player presses during enemy blink
+                playSound(DigiviceAudioManager.Cue.SELECT)
                 setBattlePhase(session, BattlePhase.MENU)
             }
             BattlePhase.EVO -> Unit
@@ -1562,6 +1641,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         when (session.phase) {
             BattlePhase.ALERT -> {
                 playSound(DigiviceAudioManager.Cue.SELECT)
+                setBattlePhase(session, BattlePhase.START)
+            }
+            BattlePhase.START -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
                 setBattlePhase(session, BattlePhase.MENU)
             }
             BattlePhase.MENU -> {
@@ -1599,10 +1682,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                     // Second press within window — flee
                     resolveRun()
                 } else {
-                    // First press — advance to MENU
-                    setBattlePhase(session, BattlePhase.MENU)
+                    // First press — advance to START (enemy blink)
+                    setBattlePhase(session, BattlePhase.START)
                 }
                 lastBackPressAtMs = now
+            }
+            BattlePhase.START -> {
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                setBattlePhase(session, BattlePhase.MENU)
             }
             BattlePhase.MENU -> {
                 // C does nothing in MENU — only A confirms RUN
@@ -1801,6 +1888,11 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.RESULT -> {
                 if (compute.resultBlinkStateForTick(tick, session.resultText == "WIN").finished) {
                     finalizeBattleResult()
+                }
+            }
+            BattlePhase.START -> {
+                if (compute.startBlinkStateForTick(tick, session.boss).finished) {
+                    setBattlePhase(session, BattlePhase.MENU)
                 }
             }
             else -> Unit
@@ -2025,7 +2117,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     override fun motionInputMode(): GlyphMotionMode {
         return if (screen == Screen.BATTLE && battleSession?.phase in setOf(BattlePhase.PUSH, BattlePhase.READY_GO)) {
-            GlyphMotionMode.PUSH_ALL_DIRECTIONS
+            // Original GML used keyboard mashing (press += 2 per key event).
+            // MASH_ALL_DIRECTIONS maps raw acceleration magnitude to button-B presses —
+            // the closest phone equivalent to rapid button mashing.
+            GlyphMotionMode.MASH_ALL_DIRECTIONS
         } else {
             GlyphMotionMode.FOUR_WAY_LOCK
         }
@@ -2369,6 +2464,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
         when (phase) {
             BattlePhase.ALERT -> playSound(DigiviceAudioManager.Cue.ALERT_OLD)
+            BattlePhase.START -> playSound(DigiviceAudioManager.Cue.ALERT_OLD)
             BattlePhase.READY_GO -> playSound(DigiviceAudioManager.Cue.READY_GO)
             BattlePhase.EVO_SEQUENCE -> playSound(DigiviceAudioManager.Cue.EVO)
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> playSound(DigiviceAudioManager.Cue.ATTACK)
@@ -2611,6 +2707,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 val finishDevolveState = if (session.phase == BattlePhase.DEVOLVE) compute.finishDevolveStateForTick(tick, session.currentEvo) else null
                 val finishSlideState = if (session.phase == BattlePhase.FINISH) compute.finishSlideStateForTick(tick) else null
                 val resultBlinkState = if (session.phase == BattlePhase.RESULT) compute.resultBlinkStateForTick(tick, session.resultText == "WIN") else null
+                val startBlinkState = if (session.phase == BattlePhase.START) compute.startBlinkStateForTick(tick, session.boss) else null
                 PhoneBattleSnapshot(
                     enemyId = session.enemyId,
                     enemyName = session.enemyName,
@@ -2637,7 +2734,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                     resultAnimation = resultBlinkState?.animation ?: false,
                     attackTurn = attackTimeline?.turn ?: 0,
                     attackPosX = attackTimeline?.posX ?: 0,
-                    attackAnimation = attackTimeline?.animation ?: false
+                    attackAnimation = attackTimeline?.animation ?: false,
+                    startBlinkVisible = startBlinkState?.blinkVisible ?: true,
+                    startSlideX = startBlinkState?.slideX ?: 0,
+                    startSlideY = startBlinkState?.slideY ?: 0
                 )
             },
             rescue = rescueSession?.let { rescue ->
@@ -2883,8 +2983,28 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         drawText(if (session.boss) "BOSS" else "BTTL", 2, 5)
         when (session.phase) {
             BattlePhase.ALERT -> {
-                drawAssetSprite("spr_battle_alert_digivice_v1", 2, 9, 20, 7)
-                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 9, 15, 8, 8, frameCounter / 10)
+                // GML alarm[1]=10 frames (0.33s) toggles alert text visibility
+                // GML alarm[0]=30 frames (1.0s) toggles Digimon sprite frame
+                val alertTextVisible = ((session.phaseTick / 3) / 2) % 2 == 0 // 3 ticks ≈ 0.33s
+                val digimonFrame = (session.phaseTick / 10) % 2 // 10 ticks = 1.0s
+                if (alertTextVisible) {
+                    drawAssetSprite("spr_battle_alert_digivice_v1", 2, 9, 20, 7)
+                }
+                drawAssetSprite(ATTACK_SPRITES[state.currentChar], 9, 15, 8, 8, digimonFrame)
+            }
+            BattlePhase.START -> {
+                val startState = compute.startBlinkStateForTick(session.phaseTick, session.boss)
+                if (startState.blinkVisible) {
+                    val enemySprite = ENEMY_SPRITES[session.enemyId]
+                    val spriteWidth = spriteLibrary.getFrame(enemySprite, 0)?.width ?: 16
+                    if (spriteWidth == 24) {
+                        // boss (24px): draw at slide position
+                        drawAssetSprite(enemySprite, 8 + startState.slideX, 8 + startState.slideY / 2, 10, 10)
+                    } else {
+                        // regular enemy (16px): centered blink
+                        drawAssetSprite(enemySprite, 8, 8, 10, 10)
+                    }
+                }
             }
             BattlePhase.EVO -> Unit
             BattlePhase.MENU -> {
@@ -3152,6 +3272,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         drawPhoneAssetSprite(ENEMY_SPRITES[session.enemyId], screenRect.left.toInt() + 112, screenRect.top.toInt() + 18, 24, 24, frameCounter / 10)
         val footer = when (session.phase) {
             BattlePhase.ALERT -> "A to continue"
+            BattlePhase.START -> session.enemyName
             BattlePhase.MENU -> BATTLE_ITEMS[session.menuIndex]
             BattlePhase.PUSH -> "Mash B ${session.pushPress}"
             BattlePhase.EVO -> "Charge ${session.evoCharge}"
