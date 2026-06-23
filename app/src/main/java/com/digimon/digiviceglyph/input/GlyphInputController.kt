@@ -55,10 +55,10 @@ class GlyphInputController(context: Context) : SensorEventListener {
     private var sensorsRegistered = false
 
     private var glyphPhysicalDown = false
-    private var glyphChangePulseDown = false
-    private var buttonAEmitted = false
+    private var buttonAActive = false
     private var buttonBActive = false
     private var buttonCActive = false
+    private var buttonBackActive = false
 
     private var filteredX = 0f
     private var filteredY = 0f
@@ -74,9 +74,10 @@ class GlyphInputController(context: Context) : SensorEventListener {
     private var lastWalkStepAtMs = 0L
     private var lastStepCounterValue: Int? = null
 
-    private val releaseGlyphChangePulse = Runnable {
-        glyphChangePulseDown = false
-        syncButtonA()
+    private val releaseATap = Runnable {
+        if (!buttonAActive) return@Runnable
+        buttonAActive = false
+        sink?.onButtonUp(GlyphButton.A)
     }
 
     private val releaseBTap = Runnable {
@@ -89,6 +90,12 @@ class GlyphInputController(context: Context) : SensorEventListener {
         if (!buttonCActive) return@Runnable
         buttonCActive = false
         sink?.onButtonUp(GlyphButton.C)
+    }
+
+    private val releaseBackTap = Runnable {
+        if (!buttonBackActive) return@Runnable
+        buttonBackActive = false
+        sink?.onButtonUp(GlyphButton.BACK)
     }
 
     fun attach(buttonSink: GlyphButtonSink) {
@@ -110,35 +117,21 @@ class GlyphInputController(context: Context) : SensorEventListener {
         resetMotionState()
     }
 
-    /**
-     * Nothing sends action_down/action_up only while this toy owns the Glyph button.
-     * Keep that physical state independent from synthetic flick taps.
-     */
     fun onGlyphButtonDown() {
         if (glyphPhysicalDown) return
         glyphPhysicalDown = true
-        Log.d(TAG, "Glyph action_down -> A down")
-        syncButtonA()
+        flickDetector.reset()
+        Log.d(TAG, "Glyph action_down -> control lock armed")
     }
 
     fun onGlyphButtonUp() {
         if (!glyphPhysicalDown) return
         glyphPhysicalDown = false
-        Log.d(TAG, "Glyph action_up -> A up")
-        syncButtonA()
+        Log.d(TAG, "Glyph action_up -> control lock released")
     }
 
-    /**
-     * EVENT_CHANGE is Nothing's long-press action. Some firmware sends it instead
-     * of a useful down/up pair, so expose it as a short A pulse.
-     */
     fun onGlyphButtonChange() {
-        if (glyphPhysicalDown || glyphChangePulseDown) return
-        glyphChangePulseDown = true
-        Log.d(TAG, "Glyph change -> A tap")
-        syncButtonA()
-        mainHandler.removeCallbacks(releaseGlyphChangePulse)
-        mainHandler.postDelayed(releaseGlyphChangePulse, BUTTON_TAP_MS)
+        Log.d(TAG, "Glyph change ignored in lock-flick mode")
     }
 
     override fun onSensorChanged(event: SensorEvent) {
@@ -148,7 +141,7 @@ class GlyphInputController(context: Context) : SensorEventListener {
             return
         }
         if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR) {
-            if (sink?.acceptsPassiveWalking() == true && canTriggerWalkingStep(nowMs)) {
+            if (!glyphPhysicalDown && sink?.acceptsPassiveWalking() == true && canTriggerWalkingStep(nowMs)) {
                 Log.d(TAG, "Step detector accepted values=${event.values.joinToString()}")
                 lastWalkStepAtMs = nowMs
                 sink?.triggerStep()
@@ -194,9 +187,11 @@ class GlyphInputController(context: Context) : SensorEventListener {
             return
         }
 
-        if (sink?.acceptsPassiveWalking() == true) {
+        if (!glyphPhysicalDown && sink?.acceptsPassiveWalking() == true) {
             processWalkingMotion(nowMs, filteredX, filteredY, filteredZ)
         }
+
+        if (!glyphPhysicalDown) return
 
         val gesture = flickDetector.update(
             nowMs = nowMs,
@@ -206,9 +201,30 @@ class GlyphInputController(context: Context) : SensorEventListener {
         ) ?: return
 
         when (gesture) {
-            FlickGestureDetector.Gesture.LEFT -> pressCTap()
-            FlickGestureDetector.Gesture.RIGHT -> pressBTap()
-            FlickGestureDetector.Gesture.VERTICAL_STEP -> sink?.triggerStep()
+            FlickGestureDetector.Gesture.LEFT -> {
+                when (motionMode) {
+                    GlyphMotionMode.PUSH_ALL_DIRECTIONS -> pressATap()
+                    else -> pressBTap()
+                }
+            }
+            FlickGestureDetector.Gesture.RIGHT -> {
+                when (motionMode) {
+                    GlyphMotionMode.PUSH_ALL_DIRECTIONS -> pressATap()
+                    else -> pressCTap()
+                }
+            }
+            FlickGestureDetector.Gesture.UP -> {
+                when (motionMode) {
+                    GlyphMotionMode.PUSH_ALL_DIRECTIONS -> pressATap()
+                    else -> pressATap()
+                }
+            }
+            FlickGestureDetector.Gesture.DOWN -> {
+                when (motionMode) {
+                    GlyphMotionMode.PUSH_ALL_DIRECTIONS -> pressATap()
+                    else -> pressBackTap()
+                }
+            }
         }
         Log.d(TAG, "Motion gesture=$gesture")
         vibrateFlickConfirm()
@@ -240,17 +256,6 @@ class GlyphInputController(context: Context) : SensorEventListener {
             TAG,
             "Sensor registration any=$sensorsRegistered motionRegistered=$motionRegistered motionType=${motionSensor?.stringType} stepCounterRegistered=$stepCounterRegistered stepCounterType=${stepCounterSensor?.stringType} stepDetectorRegistered=$stepDetectorRegistered stepDetectorType=${stepDetectorSensor?.stringType}"
         )
-    }
-
-    private fun syncButtonA() {
-        val shouldBeDown = glyphPhysicalDown || glyphChangePulseDown
-        if (shouldBeDown == buttonAEmitted) return
-        buttonAEmitted = shouldBeDown
-        if (shouldBeDown) {
-            sink?.onButtonDown(GlyphButton.A)
-        } else {
-            sink?.onButtonUp(GlyphButton.A)
-        }
     }
 
     private fun processMashMotion(x: Float, y: Float, z: Float): Boolean {
@@ -308,6 +313,18 @@ class GlyphInputController(context: Context) : SensorEventListener {
         )
     }
 
+    private fun pressATap(tapMs: Long = BUTTON_TAP_MS): Boolean {
+        if (buttonAActive) {
+            Log.d(TAG, "pressATap ignored because A is still active")
+            return false
+        }
+        buttonAActive = true
+        sink?.onButtonDown(GlyphButton.A)
+        mainHandler.removeCallbacks(releaseATap)
+        mainHandler.postDelayed(releaseATap, tapMs)
+        return true
+    }
+
     private fun pressBTap(tapMs: Long = BUTTON_TAP_MS): Boolean {
         if (buttonBActive) {
             Log.d(TAG, "pressBTap ignored because B is still active")
@@ -321,7 +338,10 @@ class GlyphInputController(context: Context) : SensorEventListener {
     }
 
     private fun pressCTap(tapMs: Long = BUTTON_TAP_MS): Boolean {
-        if (buttonCActive) return false
+        if (buttonCActive) {
+            Log.d(TAG, "pressCTap ignored because C is still active")
+            return false
+        }
         buttonCActive = true
         sink?.onButtonDown(GlyphButton.C)
         mainHandler.removeCallbacks(releaseCTap)
@@ -329,19 +349,34 @@ class GlyphInputController(context: Context) : SensorEventListener {
         return true
     }
 
+    private fun pressBackTap(tapMs: Long = BUTTON_TAP_MS): Boolean {
+        if (buttonBackActive) {
+            Log.d(TAG, "pressBackTap ignored because BACK is still active")
+            return false
+        }
+        buttonBackActive = true
+        sink?.onButtonDown(GlyphButton.BACK)
+        mainHandler.removeCallbacks(releaseBackTap)
+        mainHandler.postDelayed(releaseBackTap, tapMs)
+        return true
+    }
+
     private fun releaseAll() {
-        mainHandler.removeCallbacks(releaseGlyphChangePulse)
+        mainHandler.removeCallbacks(releaseATap)
         mainHandler.removeCallbacks(releaseBTap)
         mainHandler.removeCallbacks(releaseCTap)
+        mainHandler.removeCallbacks(releaseBackTap)
 
-        glyphPhysicalDown = false
-        glyphChangePulseDown = false
-        if (buttonAEmitted) sink?.onButtonUp(GlyphButton.A)
+        if (buttonAActive) sink?.onButtonUp(GlyphButton.A)
         if (buttonBActive) sink?.onButtonUp(GlyphButton.B)
         if (buttonCActive) sink?.onButtonUp(GlyphButton.C)
-        buttonAEmitted = false
+        if (buttonBackActive) sink?.onButtonUp(GlyphButton.BACK)
+
+        glyphPhysicalDown = false
+        buttonAActive = false
         buttonBActive = false
         buttonCActive = false
+        buttonBackActive = false
     }
 
     private fun resetMotionState() {
@@ -358,10 +393,12 @@ class GlyphInputController(context: Context) : SensorEventListener {
         walkArmed = true
         lastWalkStepAtMs = 0L
         lastStepCounterValue = null
+        glyphPhysicalDown = false
         flickDetector.reset()
     }
 
     private fun processStepCounterEvent(nowMs: Long, event: SensorEvent) {
+        if (glyphPhysicalDown) return
         val currentValue = event.values.firstOrNull()?.toInt() ?: return
         val previousValue = lastStepCounterValue
         lastStepCounterValue = currentValue

@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Log
+import java.util.Calendar
 import kotlin.math.roundToInt
 
 data class PhoneBattleSnapshot(
@@ -76,6 +77,7 @@ data class PhoneCardSnapshot(
 
 data class PhoneVisualSnapshot(
     val screen: String,
+    val idleClockEnabled: Boolean,
     val currentChar: Int,
     val selectedChar: Int,
     val menuIndex: Int,
@@ -124,7 +126,12 @@ class ExactPhoneRenderer(
         private const val GLYPH_SIZE = 25
         private const val GLYPH_SPRITE_LUMA_THRESHOLD = 160
         private const val GLYPH_CROP_LEFT = (CONTENT_WIDTH - GLYPH_SIZE) / 2
-        private const val GLYPH_CONTENT_TOP = 5
+        private const val GLYPH_CONTENT_TOP = 4
+        private const val GLYPH_CLOCK_DIGIT_WIDTH = 4
+        private const val GLYPH_CLOCK_DIGIT_HEIGHT = 4
+        private const val GLYPH_CLOCK_DIGIT_GAP = 1
+        private const val GLYPH_CLOCK_TOP = 0
+        private const val GLYPH_CLOCK_BOTTOM = 21
 
         private val BASE_SPRITES = arrayOf("spr_agu", "spr_gabu", "spr_biyo", "spr_pal", "spr_tento", "spr_goma", "spr_pata", "spr_gato")
         private val ATTACK_SPRITES = arrayOf("spr_agu_attack", "spr_gabu_attack", "spr_biyo_attack", "spr_pal_attack", "spr_tento_attack", "spr_goma_attack", "spr_pata_attack", "spr_gato_attack")
@@ -294,7 +301,15 @@ class ExactPhoneRenderer(
         ) {
             return renderGlyphBattleHp(snapshot, battle, frameCounter)
         }
-        return renderContent(snapshot, frameCounter)
+        renderContent(snapshot, frameCounter)
+        glyphCanvas.drawColor(Color.WHITE)
+        srcRect.set(GLYPH_CROP_LEFT, 0, GLYPH_CROP_LEFT + GLYPH_SIZE, CONTENT_HEIGHT)
+        dstRect.set(0, GLYPH_CONTENT_TOP, GLYPH_SIZE, GLYPH_CONTENT_TOP + CONTENT_HEIGHT)
+        glyphCanvas.drawBitmap(contentBitmap, srcRect, dstRect, bitmapPaint)
+        if (snapshot.screen == "IDLE" && snapshot.idleClockEnabled) {
+            drawGlyphIdleClock()
+        }
+        return glyphBitmap
     }
 
     private fun drawBoot(snapshot: PhoneVisualSnapshot, frameCounter: Int) {
@@ -693,6 +708,29 @@ class ExactPhoneRenderer(
         glyphCanvas.drawBitmap(contentBitmap, srcRect, dstRect, bitmapPaint)
         drawGlyphHpOrbs(hpValue)
         return glyphBitmap
+    }
+
+    private fun drawGlyphIdleClock() {
+        val now = Calendar.getInstance()
+        drawGlyphClockValue(now.get(Calendar.HOUR_OF_DAY), GLYPH_CLOCK_TOP)
+        drawGlyphClockValue(now.get(Calendar.MINUTE), GLYPH_CLOCK_BOTTOM)
+    }
+
+    private fun drawGlyphClockValue(value: Int, y: Int) {
+        val normalized = value.coerceIn(0, 99)
+        val tens = normalized / 10
+        val ones = normalized % 10
+        val totalWidth = (GLYPH_CLOCK_DIGIT_WIDTH * 2) + GLYPH_CLOCK_DIGIT_GAP
+        val startX = (GLYPH_SIZE - totalWidth) / 2
+        drawGlyphClockDigit(tens, startX, y)
+        drawGlyphClockDigit(ones, startX + GLYPH_CLOCK_DIGIT_WIDTH + GLYPH_CLOCK_DIGIT_GAP, y)
+    }
+
+    private fun drawGlyphClockDigit(digit: Int, x: Int, y: Int) {
+        val sprite = spriteLibrary.getFrame("spr_numbers", digit.coerceIn(0, 9)) ?: return
+        srcRect.set(0, 0, sprite.width, sprite.height)
+        dstRect.set(x, y, x + GLYPH_CLOCK_DIGIT_WIDTH, y + GLYPH_CLOCK_DIGIT_HEIGHT)
+        glyphCanvas.drawBitmap(sprite, srcRect, dstRect, bitmapPaint)
     }
 
     private fun drawGlyphHpOrbs(hpValue: Int) {

@@ -655,6 +655,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private var rescueSession: RescueSession? = null
     private var slotSession: SlotSession? = null
     private var cardSession: CardSession? = null
+    private var idleClockEnabled = false
     private var lastBackPressAtMs: Long = 0L
     private val ALERT_FLEE_WINDOW_MS = 600L
     private val STEP_POSE_DURATION_MS = 6_000L
@@ -670,6 +671,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             GlyphButton.A -> handleConfirm()
             GlyphButton.B -> handleAdvance()
             GlyphButton.C -> handleBack()
+            GlyphButton.BACK -> handleBack()
         }
     }
 
@@ -1756,6 +1758,12 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     fun isSoundEnabled(): Boolean = state.soundEnabled
 
+    fun toggleIdleClock() {
+        idleClockEnabled = !idleClockEnabled
+    }
+
+    fun isIdleClockEnabled(): Boolean = idleClockEnabled
+
     override fun triggerStep() {
         triggerStepsInternal(currentStepMultiplier())
     }
@@ -1773,9 +1781,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     override fun motionInputMode(): GlyphMotionMode {
         return if (screen == Screen.BATTLE && battleSession?.phase in setOf(BattlePhase.PUSH, BattlePhase.READY_GO)) {
-            GlyphMotionMode.MASH_ALL_DIRECTIONS
+            GlyphMotionMode.PUSH_ALL_DIRECTIONS
         } else {
-            GlyphMotionMode.DEFAULT
+            GlyphMotionMode.FOUR_WAY_LOCK
         }
     }
 
@@ -2264,6 +2272,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         val encounterType = state.lastEncounter?.type ?: "none"
         return PhoneVisualSnapshot(
             screen = screen.name,
+            idleClockEnabled = idleClockEnabled,
             currentChar = state.currentChar.coerceIn(BASE_SPRITES.indices),
             selectedChar = selectedChar.coerceIn(BASE_SPRITES.indices),
             menuIndex = menuIndex,

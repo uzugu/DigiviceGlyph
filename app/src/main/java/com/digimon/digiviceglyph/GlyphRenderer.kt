@@ -61,6 +61,9 @@ class GlyphRenderer(private val context: Context) {
         if (source.width == LCD_WIDTH && source.height == LCD_HEIGHT) {
             return mapLcdContentToMatrix(source)
         }
+        if (source.width == MATRIX_SIZE && source.height == MATRIX_SIZE) {
+            return mapMatrixBitmap(source)
+        }
 
         val width = source.width.coerceAtLeast(1)
         val height = source.height.coerceAtLeast(1)
@@ -69,6 +72,19 @@ class GlyphRenderer(private val context: Context) {
             for (x in 0 until MATRIX_SIZE) {
                 val sampleX = ((x + 0.5f) * width / MATRIX_SIZE).toInt().coerceIn(0, width - 1)
                 val color = source.getPixel(sampleX, sampleY)
+                val luma = ((Color.red(color) * 299) + (Color.green(color) * 587) + (Color.blue(color) * 114)) / 1000
+                if (luma < LUMA_THRESHOLD) {
+                    outputPixels[y * MATRIX_SIZE + x] = Color.WHITE
+                }
+            }
+        }
+        return writeOutputBitmap()
+    }
+
+    private fun mapMatrixBitmap(source: Bitmap): Bitmap {
+        for (y in 0 until MATRIX_SIZE) {
+            for (x in 0 until MATRIX_SIZE) {
+                val color = source.getPixel(x, y)
                 val luma = ((Color.red(color) * 299) + (Color.green(color) * 587) + (Color.blue(color) * 114)) / 1000
                 if (luma < LUMA_THRESHOLD) {
                     outputPixels[y * MATRIX_SIZE + x] = Color.WHITE

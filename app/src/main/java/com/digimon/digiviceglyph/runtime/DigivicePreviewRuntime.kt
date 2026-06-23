@@ -27,6 +27,7 @@ class DigivicePreviewRuntime : GlyphButtonSink {
             GlyphButton.A -> buttonA = true
             GlyphButton.B -> buttonB = true
             GlyphButton.C -> buttonC = true
+            GlyphButton.BACK -> Unit
         }
         lastAction = "${button.name} DOWN"
         lastActionAtMs = System.currentTimeMillis()
@@ -37,6 +38,7 @@ class DigivicePreviewRuntime : GlyphButtonSink {
             GlyphButton.A -> buttonA = false
             GlyphButton.B -> buttonB = false
             GlyphButton.C -> buttonC = false
+            GlyphButton.BACK -> Unit
         }
         lastAction = "${button.name} UP"
         lastActionAtMs = System.currentTimeMillis()

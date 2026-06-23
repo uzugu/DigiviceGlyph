@@ -29,6 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var portStatus: TextView
     private lateinit var previewView: GlyphPreviewView
     private lateinit var btnAutoRun: Button
+    private lateinit var btnIdleClock: Button
     private lateinit var btnSound: Button
     private lateinit var btnStepMultiplier: Button
     private lateinit var btnWalk490: Button
@@ -86,6 +87,7 @@ class MainActivity : AppCompatActivity() {
         val btnB = findViewById<Button>(R.id.btnB)
         val btnC = findViewById<Button>(R.id.btnC)
         btnAutoRun = findViewById(R.id.btnAutoRun)
+        btnIdleClock = findViewById(R.id.btnIdleClock)
         btnSound = findViewById(R.id.btnSound)
         btnStepMultiplier = findViewById(R.id.btnStepMultiplier)
         btnWalk490 = findViewById(R.id.btnWalk490)
@@ -124,6 +126,11 @@ class MainActivity : AppCompatActivity() {
             updateAutorunButton()
             previewView.setBitmap(runtime.renderPhoneFrame())
         }
+        btnIdleClock.setOnClickListener {
+            runtime.toggleIdleClock()
+            updateIdleClockButton()
+            previewView.setBitmap(runtime.renderPhoneFrame())
+        }
         btnSound.setOnClickListener {
             runtime.toggleSound()
             updateSoundButton()
@@ -138,6 +145,7 @@ class MainActivity : AppCompatActivity() {
             previewView.setBitmap(runtime.renderPhoneFrame())
         }
         updateAutorunButton()
+        updateIdleClockButton()
         updateSoundButton()
         updateStepMultiplierButton()
         previewView.setBitmap(runtime.renderPhoneFrame())
@@ -148,6 +156,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         updateGlyphStatus()
         updateAutorunButton()
+        updateIdleClockButton()
         updateStepMultiplierButton()
         previewHandler.removeCallbacks(previewTicker)
         previewHandler.post(previewTicker)
@@ -217,6 +226,12 @@ class MainActivity : AppCompatActivity() {
     private fun updateSoundButton() {
         btnSound.text = getString(
             if (runtime.isSoundEnabled()) R.string.sound_toggle_on else R.string.sound_toggle_off
+        )
+    }
+
+    private fun updateIdleClockButton() {
+        btnIdleClock.text = getString(
+            if (runtime.isIdleClockEnabled()) R.string.idle_clock_toggle_on else R.string.idle_clock_toggle_off
         )
     }
 

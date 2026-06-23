@@ -18,11 +18,13 @@
     <string name="button_c">C Stats / Next</string>
     <string name="autorun_toggle_off">Auto Walk Off</string>
     <string name="autorun_toggle_on">Auto Walk On</string>
+    <string name="idle_clock_toggle_off">Idle Clock Off</string>
+    <string name="idle_clock_toggle_on">Idle Clock On</string>
     <string name="sound_toggle_off">Sound Off</string>
     <string name="sound_toggle_on">Sound On</string>
     <string name="step_multiplier_format">Step Multiplier x%1$d</string>
     <string name="open_settings">Open System Settings</string>
-    <string name="control_notes">The phone view mirrors the same runtime used by the Glyph service. From idle, B opens the six-item menu, C opens the distance and step pager, pressing C again advances those pages, and vertical flicks or real walking motion count steps while the Digivice is idle. Auto Walk and the step multiplier are app-only helper controls.</string>
+    <string name="control_notes">The phone view mirrors the same runtime used by the Glyph service. From idle, B opens the six-item menu, C opens the distance and step pager, pressing C again advances those pages, and walking still counts steps when the Glyph controls are unlocked. On Glyph hardware, hold the Glyph button to enter control lock, then flick up for A, left for B, right for C, and down for Back. During battle push phases, any flick acts as push input. Idle Clock adds the phone time to the spare top and bottom Glyph rows during idle only.</string>
     <string name="preview_started">Preview service started</string>
     <string name="notification_required">Notification permission is required to keep the preview service alive.</string>
     <string name="activity_recognition_required">Allow physical activity access so real walking can count steps.</string>

@@ -7,7 +7,8 @@ internal class FlickGestureDetector {
     enum class Gesture {
         LEFT,
         RIGHT,
-        VERTICAL_STEP
+        UP,
+        DOWN
     }
 
     private enum class Axis {
@@ -70,7 +71,7 @@ internal class FlickGestureDetector {
         ) {
             val gesture = when (pendingAxis) {
                 Axis.X -> if (pendingDirection > 0) Gesture.RIGHT else Gesture.LEFT
-                Axis.Y -> Gesture.VERTICAL_STEP
+                Axis.Y -> if (pendingDirection > 0) Gesture.DOWN else Gesture.UP
                 Axis.NONE -> return null
             }
             lastGestureAtMs = nowMs
