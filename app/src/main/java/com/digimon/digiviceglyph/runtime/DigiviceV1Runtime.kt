@@ -38,7 +38,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         RESCUE
     }
 
-    private enum class BattlePhase {
+    internal enum class BattlePhase {
         ALERT,
         MENU,
         PUSH,
@@ -73,7 +73,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         val attack: Int
     )
 
-    private data class BattleSession(
+    internal data class BattleSession(
         val enemyId: Int,
         val enemyName: String,
         val boss: Boolean,
@@ -90,6 +90,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var resultText: String = "",
         var escaped: Boolean = false,
         var phaseStartedAtMs: Long = System.currentTimeMillis(),
+        var phaseTick: Int = 0,
         var evoSuccess: Boolean = false,
         var pendingMineHp: Int? = null,
         var pendingEnemyHp: Int? = null,
@@ -185,7 +186,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var nextPhaseAtMs: Long = 0L
     )
 
-    companion object {
+    companion object compute {
         private const val SIZE = 25
         private const val PHONE_WIDTH = 160
         private const val PHONE_HEIGHT = 160
@@ -370,6 +371,224 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 !isEnemyCard && !pressed -> 1
                 else -> -1
             }
+        }
+
+        /* ---- tick-based battle advancement ---- */
+        // Each phase-tick = one render call during battle.
+        // At the default 90ms frame interval that's ~11 ticks/sec; at 50ms it's 20 ticks/sec.
+        // For deterministic timing we normalise to a virtual 10Hz tick (100ms) —
+        // `advancePhaseTick()` accumulates real time and only increments when 100ms has passed.
+
+        internal const val VIRTUAL_TICK_MS = 100L          // 10Hz virtual tick
+        internal const val READY_GO_TICKS_PER_FRAME = 60   // 60 ticks = 6 seconds per frame
+        internal const val RESULT_TICKS_PER_BLINK = 10     // 10 ticks = 1 second blink
+        internal const val PUSH_TICKS_PER_ALARM_TICK = 10  // 10 ticks per alarm countdown tick
+        internal const val FINISH_SLIDE_TICKS_PER_STEP = 1 // 1 slide step per tick (100ms)
+        internal const val DEVOLVE_TICKS_PER_STAGE = 10    // normal stage: 10 ticks = 1s
+        internal const val DEVOLVE_TICKS_PER_FAST_STAGE = 5 // fast stage: 5 ticks = 500ms
+
+        internal fun advancePhaseTick(session: BattleSession, nowMs: Long) {
+            val elapsed = (nowMs - session.phaseStartedAtMs).coerceAtLeast(0L)
+            val newTick = (elapsed / VIRTUAL_TICK_MS).toInt()
+            if (newTick > session.phaseTick) {
+                session.phaseTick = newTick
+            }
+        }
+
+        /* ---- tick-based state functions (replace compute*State) ---- */
+
+        internal fun attackTimelineForTick(
+            tick: Int,
+            currentEvo: Int,
+            boss: Boolean,
+            mineAttack: Boolean
+        ): AttackTimelineState {
+            var remaining = tick
+            var turn = 0
+            var posX = 0
+            var animation = false
+            var hitTriggered = false
+            var damageApplied = false
+
+            val introTicks = (1_000L / VIRTUAL_TICK_MS).toInt() // 10
+            if (remaining < introTicks) return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied, finished = false)
+            remaining -= introTicks
+            animation = true
+            turn = 1
+
+            val firstStepTicks = if ((mineAttack && currentEvo > 0) || (boss && !mineAttack)) 4 else 2
+            val firstTurnIncrement = if ((mineAttack && currentEvo > 0) || boss) 2 else 1
+
+            while (turn in 1..16 && remaining >= firstStepTicks) {
+                if (turn == 3) hitTriggered = true
+                posX -= 1
+                turn += firstTurnIncrement
+                if (turn >= 8) animation = false
+                remaining -= firstStepTicks
+            }
+
+            val transitionTicks = (200L / VIRTUAL_TICK_MS).toInt() // 2
+            if (turn == 17 && remaining >= transitionTicks) {
+                remaining -= transitionTicks
+                turn = 18
+                posX = 0
+            }
+
+            val secondStepTicks = if ((mineAttack && boss) || (!mineAttack && currentEvo != 0)) 4 else 2
+            val secondTurnIncrement = if ((mineAttack && boss) || (!mineAttack && currentEvo != 0)) 2 else 1
+
+            while (turn in 18..36 && remaining >= secondStepTicks) {
+                posX += if (mineAttack) -1 else 1
+                turn += secondTurnIncrement
+                remaining -= secondStepTicks
+            }
+
+            val animTicks = (400L / VIRTUAL_TICK_MS).toInt() // 4
+            while (turn in 37..45 && remaining >= animTicks) {
+                animation = !animation
+                turn += 1
+                remaining -= animTicks
+            }
+
+            val pauseTicks = (1_000L / VIRTUAL_TICK_MS).toInt() // 10
+            if (turn == 46 && remaining >= pauseTicks) {
+                remaining -= pauseTicks
+                turn = 47
+            }
+            if (turn == 47 && remaining >= pauseTicks) {
+                remaining -= pauseTicks
+                damageApplied = true
+                turn = 48
+            }
+            if (turn == 48 && remaining >= pauseTicks) {
+                return AttackTimelineState(49, posX, animation, hitTriggered, damageApplied = true, finished = true)
+            }
+            if (turn >= 48) damageApplied = true
+
+            return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied, finished = false)
+        }
+
+        internal fun readyGoStateForTick(tick: Int): ReadyGoState {
+            return when {
+                tick < READY_GO_TICKS_PER_FRAME -> ReadyGoState(frame = 0, finished = false)
+                tick < READY_GO_TICKS_PER_FRAME * 2 -> ReadyGoState(frame = 1, finished = false)
+                else -> ReadyGoState(frame = 1, finished = true)
+            }
+        }
+
+        internal fun pushStateForTick(tick: Int): PushState {
+            // PUSH_WINDOW_MS = 30_000ms → 300 ticks. PUSH_ALARM_TICKS = 20.
+            // Each alarm tick = PUSH_WINDOW_MS / PUSH_ALARM_TICKS = 1500ms = 15 virtual ticks
+            val pushWindowTicks = (PUSH_WINDOW_MS / VIRTUAL_TICK_MS).toInt() // 300
+            val ticksPerAlarm = (pushWindowTicks + PUSH_ALARM_TICKS - 1) / PUSH_ALARM_TICKS // ceil
+            val finished = tick >= pushWindowTicks
+            val elapsedAlarmTicks = (tick * PUSH_ALARM_TICKS / pushWindowTicks).coerceIn(0, PUSH_ALARM_TICKS)
+            return PushState(
+                remainingTicks = (PUSH_ALARM_TICKS - elapsedAlarmTicks).coerceAtLeast(0),
+                finished = finished
+            )
+        }
+
+        internal fun evoSequenceStateForTick(tick: Int): EvoSequenceState {
+            var remaining = tick
+            var currentMenu = 0
+            var animation = false
+            var posY = 0
+
+            while (true) {
+                when {
+                    currentMenu < 11 -> {
+                        val step = (400L / VIRTUAL_TICK_MS).toInt() // 4
+                        if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remaining -= step
+                        currentMenu += 1
+                    }
+                    currentMenu in 11..15 -> {
+                        val step = (1_000L / VIRTUAL_TICK_MS).toInt() // 10
+                        if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remaining -= step
+                        animation = !animation
+                        currentMenu += 1
+                    }
+                    currentMenu in 16..18 -> {
+                        val step = (2_000L / VIRTUAL_TICK_MS).toInt() // 20
+                        if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remaining -= step
+                        currentMenu += 1
+                    }
+                    currentMenu in 19..24 -> {
+                        val step = (400L / VIRTUAL_TICK_MS).toInt() // 4
+                        if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remaining -= step
+                        animation = !animation
+                        currentMenu += 1
+                    }
+                    currentMenu == 25 -> {
+                        val step = (2_000L / VIRTUAL_TICK_MS).toInt() // 20
+                        if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remaining -= step
+                        currentMenu = 26
+                    }
+                    currentMenu in 26..27 -> {
+                        val step = (2_000L / VIRTUAL_TICK_MS).toInt() // 20
+                        if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remaining -= step
+                        posY += 4
+                        currentMenu += 1
+                    }
+                    currentMenu == 28 -> {
+                        val step = (2_000L / VIRTUAL_TICK_MS).toInt() // 20
+                        if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remaining -= step
+                        currentMenu = 29
+                    }
+                    else -> return EvoSequenceState(currentMenu, animation, posY, finished = true)
+                }
+            }
+        }
+
+        internal fun finishDevolveStateForTick(tick: Int, currentEvo: Int): FinishDevolveState {
+            if (currentEvo <= 0) return FinishDevolveState(0, false, finished = true)
+
+            var remaining = tick
+            val stages = listOf(
+                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, false),   // 1s
+                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, true),    // 1s
+                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, false),   // 1s
+                Triple(DEVOLVE_TICKS_PER_STAGE * 4, currentEvo, true),// 4s
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, true),        // 500ms
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, currentEvo, true),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, true),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, currentEvo, true),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, false),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, true),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, false),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, true),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, false),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, true),
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, false)
+            )
+
+            for ((duration, displayedEvo, drawFilter) in stages) {
+                if (remaining < duration) return FinishDevolveState(displayedEvo, drawFilter, finished = false)
+                remaining -= duration
+            }
+            return FinishDevolveState(0, false, finished = true)
+        }
+
+        internal fun finishSlideStateForTick(tick: Int): FinishSlideState {
+            val steps = tick.coerceIn(0, 24)
+            return FinishSlideState(
+                posX = 32 - steps,
+                finished = steps >= 24
+            )
+        }
+
+        internal fun resultBlinkStateForTick(tick: Int, playerWon: Boolean): ResultBlinkState {
+            val durationTicks = if (playerWon) 80 else 90 // 8s / 9s in ticks
+            if (tick >= durationTicks) return ResultBlinkState(false, finished = true)
+            val blink = ((tick / RESULT_TICKS_PER_BLINK) % 2) == 1
+            return ResultBlinkState(blink, finished = false)
         }
 
         internal fun computeAttackTimeline(
@@ -1524,31 +1743,35 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun maybeAdvanceBattleAnimations() {
         val session = battleSession ?: return
         if (screen != Screen.BATTLE) return
+        val now = System.currentTimeMillis()
+        compute.advancePhaseTick(session, now)
+        val tick = session.phaseTick
         when (session.phase) {
             BattlePhase.PUSH -> {
-                val pushState = currentPushState(session)
+                val pushState = compute.pushStateForTick(tick)
                 session.pushAlarm = pushState.remainingTicks
                 if (pushState.finished) {
                     resolvePush()
                 }
             }
             BattlePhase.EVO_SEQUENCE -> {
-                if (currentEvoSequenceState(session).finished) {
+                if (compute.evoSequenceStateForTick(tick).finished) {
                     completeEvolutionSequence()
                 }
             }
             BattlePhase.DEVOLVE -> {
-                if (currentFinishDevolveState(session).finished) {
+                if (compute.finishDevolveStateForTick(tick, session.currentEvo).finished) {
                     setBattlePhase(session, BattlePhase.FINISH)
                 }
             }
             BattlePhase.READY_GO -> {
-                if (currentReadyGoState(session).finished) {
+                if (compute.readyGoStateForTick(tick).finished) {
                     beginEvolutionSequence()
                 }
             }
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
-                val timeline = attackTimeline(session) ?: return
+                val mineAttack = session.phase == BattlePhase.MINE_ATTACK
+                val timeline = compute.attackTimelineForTick(tick, session.currentEvo, session.boss, mineAttack)
                 if (!session.defenseSoundPlayed && timeline.turn >= 18) {
                     session.defenseSoundPlayed = true
                     playSound(DigiviceAudioManager.Cue.ATTACK_DEFENSE)
@@ -1562,7 +1785,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
             BattlePhase.FINISH -> {
-                if (currentFinishSlideState(session).finished) {
+                if (compute.finishSlideStateForTick(tick).finished) {
                     if (session.resultText == "ESC") {
                         finalizeBattleResult()
                     } else {
@@ -1571,7 +1794,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 }
             }
             BattlePhase.RESULT -> {
-                if (currentResultBlinkState(session).finished) {
+                if (compute.resultBlinkStateForTick(tick, session.resultText == "WIN").finished) {
                     finalizeBattleResult()
                 }
             }
@@ -2113,6 +2336,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun setBattlePhase(session: BattleSession, phase: BattlePhase) {
         session.phase = phase
         session.phaseStartedAtMs = System.currentTimeMillis()
+        session.phaseTick = 0
         session.defenseSoundPlayed = false
         session.damageSoundPlayed = false
         if (phase != BattlePhase.MINE_ATTACK) {
@@ -2146,42 +2370,45 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.ENEMY_ATTACK -> false
             else -> return null
         }
-        return computeAttackTimeline(
-            elapsedMs = System.currentTimeMillis() - session.phaseStartedAtMs,
-            currentEvo = session.currentEvo,
-            boss = session.boss,
-            mineAttack = mineAttack
-        )
+        val now = System.currentTimeMillis()
+        val tick = ((now - session.phaseStartedAtMs).coerceAtLeast(0L) / compute.VIRTUAL_TICK_MS).toInt()
+        return compute.attackTimelineForTick(tick, session.currentEvo, session.boss, mineAttack)
     }
 
     private fun currentReadyGoState(session: BattleSession): ReadyGoState {
-        return computeReadyGoState(System.currentTimeMillis() - session.phaseStartedAtMs)
+        val now = System.currentTimeMillis()
+        val tick = ((now - session.phaseStartedAtMs).coerceAtLeast(0L) / compute.VIRTUAL_TICK_MS).toInt()
+        return compute.readyGoStateForTick(tick)
     }
 
     private fun currentPushState(session: BattleSession): PushState {
-        return computePushState(System.currentTimeMillis() - session.phaseStartedAtMs)
+        val now = System.currentTimeMillis()
+        val tick = ((now - session.phaseStartedAtMs).coerceAtLeast(0L) / compute.VIRTUAL_TICK_MS).toInt()
+        return compute.pushStateForTick(tick)
     }
 
     private fun currentEvoSequenceState(session: BattleSession): EvoSequenceState {
-        return computeEvoSequenceState(System.currentTimeMillis() - session.phaseStartedAtMs)
+        val now = System.currentTimeMillis()
+        val tick = ((now - session.phaseStartedAtMs).coerceAtLeast(0L) / compute.VIRTUAL_TICK_MS).toInt()
+        return compute.evoSequenceStateForTick(tick)
     }
 
     private fun currentFinishDevolveState(session: BattleSession): FinishDevolveState {
-        return computeFinishDevolveState(
-            elapsedMs = System.currentTimeMillis() - session.phaseStartedAtMs,
-            currentEvo = session.currentEvo
-        )
+        val now = System.currentTimeMillis()
+        val tick = ((now - session.phaseStartedAtMs).coerceAtLeast(0L) / compute.VIRTUAL_TICK_MS).toInt()
+        return compute.finishDevolveStateForTick(tick, session.currentEvo)
     }
 
     private fun currentFinishSlideState(session: BattleSession): FinishSlideState {
-        return computeFinishSlideState(System.currentTimeMillis() - session.phaseStartedAtMs)
+        val now = System.currentTimeMillis()
+        val tick = ((now - session.phaseStartedAtMs).coerceAtLeast(0L) / compute.VIRTUAL_TICK_MS).toInt()
+        return compute.finishSlideStateForTick(tick)
     }
 
     private fun currentResultBlinkState(session: BattleSession): ResultBlinkState {
-        return computeResultBlinkState(
-            elapsedMs = System.currentTimeMillis() - session.phaseStartedAtMs,
-            playerWon = session.resultText == "WIN"
-        )
+        val now = System.currentTimeMillis()
+        val tick = ((now - session.phaseStartedAtMs).coerceAtLeast(0L) / compute.VIRTUAL_TICK_MS).toInt()
+        return compute.resultBlinkStateForTick(tick, session.resultText == "WIN")
     }
 
     private fun battlePhaseTicks(session: BattleSession): Int {
@@ -2356,13 +2583,15 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 )
             },
             battle = battleSession?.let { session ->
-                val phaseTicks = battlePhaseTicks(session)
-                val attackTimeline = attackTimeline(session)
-                val readyGoState = if (session.phase == BattlePhase.READY_GO) currentReadyGoState(session) else null
-                val evoSequenceState = if (session.phase == BattlePhase.EVO_SEQUENCE) currentEvoSequenceState(session) else null
-                val finishDevolveState = if (session.phase == BattlePhase.DEVOLVE) currentFinishDevolveState(session) else null
-                val finishSlideState = if (session.phase == BattlePhase.FINISH) currentFinishSlideState(session) else null
-                val resultBlinkState = if (session.phase == BattlePhase.RESULT) currentResultBlinkState(session) else null
+                val tick = session.phaseTick
+                val attackTimeline = if (session.phase == BattlePhase.MINE_ATTACK || session.phase == BattlePhase.ENEMY_ATTACK) {
+                    compute.attackTimelineForTick(tick, session.currentEvo, session.boss, session.phase == BattlePhase.MINE_ATTACK)
+                } else null
+                val readyGoState = if (session.phase == BattlePhase.READY_GO) compute.readyGoStateForTick(tick) else null
+                val evoSequenceState = if (session.phase == BattlePhase.EVO_SEQUENCE) compute.evoSequenceStateForTick(tick) else null
+                val finishDevolveState = if (session.phase == BattlePhase.DEVOLVE) compute.finishDevolveStateForTick(tick, session.currentEvo) else null
+                val finishSlideState = if (session.phase == BattlePhase.FINISH) compute.finishSlideStateForTick(tick) else null
+                val resultBlinkState = if (session.phase == BattlePhase.RESULT) compute.resultBlinkStateForTick(tick, session.resultText == "WIN") else null
                 PhoneBattleSnapshot(
                     enemyId = session.enemyId,
                     enemyName = session.enemyName,
@@ -2372,7 +2601,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                     currentEvo = session.currentEvo,
                     turn = session.pendingTurn ?: session.turn,
                     phase = session.phase.name,
-                    phaseTicks = phaseTicks,
+                    phaseTicks = tick,
                     menuIndex = session.menuIndex,
                     pushPress = session.pushPress,
                     evoCharge = session.evoCharge,
