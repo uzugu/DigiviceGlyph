@@ -203,6 +203,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         private const val CARD_BLINK_MS = 1000L
         private const val PUSH_ALARM_TICKS = 300
         private const val PUSH_WINDOW_MS = 10_000L
+        private const val DEFAULT_FRAME_INTERVAL_MS = 90L
+        private const val PRECISE_SCENE_FRAME_INTERVAL_MS = 50L
         private val STEP_MULTIPLIERS = intArrayOf(1, 3, 5, 10, 25, 50)
         private val MENU_ITEMS = listOf("STATE", "MAP", "SLOT", "CARD", "MED", "VS")
         private val BATTLE_ITEMS = listOf("ATK", "EVO", "SWP", "RUN")
@@ -1789,6 +1791,25 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     override fun acceptsPassiveWalking(): Boolean {
         return acceptsStepProgressOnCurrentScreen() && !state.defeat && !state.connectMode && !state.battlePending
+    }
+
+    override fun requiresIdleControlWake(): Boolean {
+        return screen == Screen.IDLE
+    }
+
+    fun preferredFrameIntervalMs(): Long {
+        return if (usesPreciseSceneTiming()) PRECISE_SCENE_FRAME_INTERVAL_MS else DEFAULT_FRAME_INTERVAL_MS
+    }
+
+    private fun usesPreciseSceneTiming(): Boolean {
+        return screen == Screen.BATTLE && battleSession?.phase in setOf(
+            BattlePhase.EVO_SEQUENCE,
+            BattlePhase.MINE_ATTACK,
+            BattlePhase.ENEMY_ATTACK,
+            BattlePhase.DEVOLVE,
+            BattlePhase.FINISH,
+            BattlePhase.RESULT
+        )
     }
 
     private fun ensureBattleSessionIfNeeded() {

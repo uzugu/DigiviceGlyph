@@ -6,4 +6,5 @@ interface GlyphButtonSink {
     fun triggerStep()
     fun motionInputMode(): GlyphMotionMode = GlyphMotionMode.DEFAULT
     fun acceptsPassiveWalking(): Boolean = false
+    fun requiresIdleControlWake(): Boolean = false
 }

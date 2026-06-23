@@ -21,10 +21,6 @@ import com.digimon.digiviceglyph.runtime.DigiviceRuntimeStore
 import com.digimon.digiviceglyph.runtime.DigiviceV1Runtime
 
 class MainActivity : AppCompatActivity() {
-    companion object {
-        private const val PREVIEW_INTERVAL_MS = 90L
-    }
-
     private lateinit var deviceStatus: TextView
     private lateinit var portStatus: TextView
     private lateinit var previewView: GlyphPreviewView
@@ -41,7 +37,7 @@ class MainActivity : AppCompatActivity() {
     private val previewTicker = object : Runnable {
         override fun run() {
             previewView.setBitmap(runtime.renderPhoneFrame())
-            previewHandler.postDelayed(this, PREVIEW_INTERVAL_MS)
+            previewHandler.postDelayed(this, runtime.preferredFrameIntervalMs())
         }
     }
 

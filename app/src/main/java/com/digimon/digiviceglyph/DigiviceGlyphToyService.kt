@@ -40,7 +40,8 @@ class DigiviceGlyphToyService : Service() {
     private val frameRunnable = object : Runnable {
         override fun run() {
             pushLiveFrame()
-            mainHandler.postDelayed(this, FRAME_INTERVAL_MS)
+            val intervalMs = runtime?.preferredFrameIntervalMs() ?: FRAME_INTERVAL_MS
+            mainHandler.postDelayed(this, intervalMs)
         }
     }
 

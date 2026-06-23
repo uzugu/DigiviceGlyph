@@ -29,6 +29,8 @@ class GlyphInputController(context: Context) : SensorEventListener {
         private const val WALK_DEBOUNCE_MS = 180L
         private const val MASH_TRIGGER_THRESHOLD = 2.35f
         private const val MASH_REARM_THRESHOLD = 0.95f
+        private const val CHANGE_LOCK_MS = 2_500L
+        private const val IDLE_CONTROL_WAKE_MS = 30_000L
     }
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -55,10 +57,13 @@ class GlyphInputController(context: Context) : SensorEventListener {
     private var sensorsRegistered = false
 
     private var glyphPhysicalDown = false
+    private var glyphChangeLockActive = false
     private var buttonAActive = false
     private var buttonBActive = false
     private var buttonCActive = false
     private var buttonBackActive = false
+    private var idleControlWakeRequired = false
+    private var lastManualInteractionAtMs = SystemClock.elapsedRealtime()
 
     private var filteredX = 0f
     private var filteredY = 0f
@@ -98,6 +103,12 @@ class GlyphInputController(context: Context) : SensorEventListener {
         sink?.onButtonUp(GlyphButton.BACK)
     }
 
+    private val releaseChangeLock = Runnable {
+        if (!glyphChangeLockActive) return@Runnable
+        glyphChangeLockActive = false
+        Log.d(TAG, "Glyph change lock timed out")
+    }
+
     fun attach(buttonSink: GlyphButtonSink) {
         sink = buttonSink
     }
@@ -118,30 +129,60 @@ class GlyphInputController(context: Context) : SensorEventListener {
     }
 
     fun onGlyphButtonDown() {
+        val nowMs = SystemClock.elapsedRealtime()
+        refreshIdleControlWake(nowMs)
         if (glyphPhysicalDown) return
         glyphPhysicalDown = true
+        if (idleControlWakeRequired) {
+            unlockIdleControlWake(nowMs)
+            armTimedControlWindow("idle wake")
+        } else {
+            noteManualInteraction(nowMs)
+            glyphChangeLockActive = false
+            mainHandler.removeCallbacks(releaseChangeLock)
+        }
         flickDetector.reset()
         Log.d(TAG, "Glyph action_down -> control lock armed")
     }
 
     fun onGlyphButtonUp() {
+        refreshIdleControlWake(SystemClock.elapsedRealtime())
         if (!glyphPhysicalDown) return
         glyphPhysicalDown = false
-        Log.d(TAG, "Glyph action_up -> control lock released")
+        Log.d(
+            TAG,
+            if (glyphChangeLockActive) {
+                "Glyph action_up -> physical lock released, timed control window remains active"
+            } else {
+                "Glyph action_up -> control lock released"
+            }
+        )
     }
 
     fun onGlyphButtonChange() {
-        Log.d(TAG, "Glyph change ignored in lock-flick mode")
+        val nowMs = SystemClock.elapsedRealtime()
+        refreshIdleControlWake(nowMs)
+        if (glyphPhysicalDown) {
+            Log.d(TAG, "Glyph change ignored because physical lock is active")
+            return
+        }
+        if (idleControlWakeRequired) {
+            Log.d(TAG, "Glyph change ignored because idle control wake is required")
+            return
+        }
+        noteManualInteraction(nowMs)
+        armTimedControlWindow("glyph change")
     }
 
     override fun onSensorChanged(event: SensorEvent) {
         val nowMs = SystemClock.elapsedRealtime()
+        refreshIdleControlWake(nowMs)
         if (event.sensor.type == Sensor.TYPE_STEP_COUNTER) {
             processStepCounterEvent(nowMs, event)
             return
         }
         if (event.sensor.type == Sensor.TYPE_STEP_DETECTOR) {
-            if (!glyphPhysicalDown && sink?.acceptsPassiveWalking() == true && canTriggerWalkingStep(nowMs)) {
+            if (!controlLocked() && sink?.acceptsPassiveWalking() == true && canTriggerWalkingStep(nowMs)) {
                 Log.d(TAG, "Step detector accepted values=${event.values.joinToString()}")
                 lastWalkStepAtMs = nowMs
                 sink?.triggerStep()
@@ -187,11 +228,11 @@ class GlyphInputController(context: Context) : SensorEventListener {
             return
         }
 
-        if (!glyphPhysicalDown && sink?.acceptsPassiveWalking() == true) {
+        if (!controlLocked() && sink?.acceptsPassiveWalking() == true) {
             processWalkingMotion(nowMs, filteredX, filteredY, filteredZ)
         }
 
-        if (!glyphPhysicalDown) return
+        if (!manualControlEnabled()) return
 
         val gesture = flickDetector.update(
             nowMs = nowMs,
@@ -226,9 +267,13 @@ class GlyphInputController(context: Context) : SensorEventListener {
                 }
             }
         }
+        noteManualInteraction(nowMs)
         Log.d(TAG, "Motion gesture=$gesture")
         vibrateFlickConfirm()
     }
+
+    private fun controlLocked(): Boolean = glyphPhysicalDown || glyphChangeLockActive
+    private fun manualControlEnabled(): Boolean = controlLocked() && !idleControlWakeRequired
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
 
@@ -366,13 +411,15 @@ class GlyphInputController(context: Context) : SensorEventListener {
         mainHandler.removeCallbacks(releaseBTap)
         mainHandler.removeCallbacks(releaseCTap)
         mainHandler.removeCallbacks(releaseBackTap)
+        mainHandler.removeCallbacks(releaseChangeLock)
 
+        glyphPhysicalDown = false
+        glyphChangeLockActive = false
+        idleControlWakeRequired = false
         if (buttonAActive) sink?.onButtonUp(GlyphButton.A)
         if (buttonBActive) sink?.onButtonUp(GlyphButton.B)
         if (buttonCActive) sink?.onButtonUp(GlyphButton.C)
         if (buttonBackActive) sink?.onButtonUp(GlyphButton.BACK)
-
-        glyphPhysicalDown = false
         buttonAActive = false
         buttonBActive = false
         buttonCActive = false
@@ -393,12 +440,24 @@ class GlyphInputController(context: Context) : SensorEventListener {
         walkArmed = true
         lastWalkStepAtMs = 0L
         lastStepCounterValue = null
+        idleControlWakeRequired = false
+        lastManualInteractionAtMs = SystemClock.elapsedRealtime()
+        glyphChangeLockActive = false
         glyphPhysicalDown = false
         flickDetector.reset()
     }
 
     private fun processStepCounterEvent(nowMs: Long, event: SensorEvent) {
-        if (glyphPhysicalDown) return
+        if (controlLocked() || sink?.acceptsPassiveWalking() != true) {
+            val currentValue = event.values.firstOrNull()?.toInt() ?: return
+            val previousValue = lastStepCounterValue
+            lastStepCounterValue = currentValue
+            if (previousValue != null) {
+                val delta = (currentValue - previousValue).coerceAtLeast(0)
+                if (delta > 0) Log.d(TAG, "Step counter delta ignored delta=$delta controlLocked=${controlLocked()}")
+            }
+            return
+        }
         val currentValue = event.values.firstOrNull()?.toInt() ?: return
         val previousValue = lastStepCounterValue
         lastStepCounterValue = currentValue
@@ -409,10 +468,6 @@ class GlyphInputController(context: Context) : SensorEventListener {
 
         val delta = (currentValue - previousValue).coerceAtLeast(0)
         if (delta == 0) return
-        if (sink?.acceptsPassiveWalking() != true) {
-            Log.d(TAG, "Step counter delta ignored delta=$delta screenNotEligible=true")
-            return
-        }
         if (!canTriggerWalkingStep(nowMs)) {
             Log.d(TAG, "Step counter delta ignored delta=$delta debounce=${nowMs - lastWalkStepAtMs}ms")
             return
@@ -446,6 +501,42 @@ class GlyphInputController(context: Context) : SensorEventListener {
 
     private fun canTriggerWalkingStep(nowMs: Long): Boolean {
         return nowMs - lastWalkStepAtMs >= WALK_DEBOUNCE_MS
+    }
+
+    private fun refreshIdleControlWake(nowMs: Long) {
+        val requiresWake = sink?.requiresIdleControlWake() == true
+        if (!requiresWake) {
+            idleControlWakeRequired = false
+            lastManualInteractionAtMs = nowMs
+            return
+        }
+        if (!idleControlWakeRequired && nowMs - lastManualInteractionAtMs >= IDLE_CONTROL_WAKE_MS) {
+            idleControlWakeRequired = true
+            glyphChangeLockActive = false
+            mainHandler.removeCallbacks(releaseChangeLock)
+            flickDetector.reset()
+            Log.d(TAG, "Idle control wake required after inactivity")
+        }
+    }
+
+    private fun unlockIdleControlWake(nowMs: Long) {
+        if (idleControlWakeRequired) {
+            Log.d(TAG, "Idle control wake unlocked by glyph button")
+        }
+        noteManualInteraction(nowMs)
+    }
+
+    private fun noteManualInteraction(nowMs: Long = SystemClock.elapsedRealtime()) {
+        lastManualInteractionAtMs = nowMs
+        idleControlWakeRequired = false
+    }
+
+    private fun armTimedControlWindow(reason: String) {
+        glyphChangeLockActive = true
+        flickDetector.reset()
+        mainHandler.removeCallbacks(releaseChangeLock)
+        mainHandler.postDelayed(releaseChangeLock, CHANGE_LOCK_MS)
+        Log.d(TAG, "$reason -> timed control lock armed")
     }
 
     private fun vibrateFlickConfirm() {

@@ -14,20 +14,22 @@ internal class FlickGestureDetector {
     private enum class Axis {
         NONE,
         X,
-        Y
+        Z
     }
 
     companion object {
-        private const val START_THRESHOLD = 4.6f
-        private const val REBOUND_THRESHOLD = 2.5f
-        private const val REBOUND_RATIO_OF_START = 0.5f
-        private const val AXIS_DOMINANCE_RATIO = 1.2f
+        private const val START_THRESHOLD = 3.0f
+        private const val REARM_THRESHOLD = 0.9f
+        private const val REBOUND_THRESHOLD = 1.1f
+        private const val REBOUND_RATIO_OF_START = 0.35f
+        private const val AXIS_DOMINANCE_RATIO = 1.15f
         private const val DIRECTION_EPSILON = 0.15f
-        private const val MIN_REBOUND_DELAY_MS = 26L
-        private const val FLICK_WINDOW_MS = 230L
-        private const val COOLDOWN_MS = 260L
+        private const val MIN_REBOUND_DELAY_MS = 18L
+        private const val FLICK_WINDOW_MS = 420L
+        private const val COOLDOWN_MS = 550L
     }
 
+    private var armed = true
     private var pendingAxis = Axis.NONE
     private var pendingDirection = 0
     private var pendingStartAbs = 0f
@@ -35,6 +37,11 @@ internal class FlickGestureDetector {
     private var lastGestureAtMs: Long? = null
 
     fun update(nowMs: Long, x: Float, y: Float, z: Float): Gesture? {
+        rearmIfSettled(x, y, z)
+        if (!armed) return null
+
+        immediateGestureIfEligible(nowMs, x, y, z)?.let { return it }
+
         if (pendingAxis == Axis.NONE) {
             beginGestureIfEligible(nowMs, x, y, z)
             return null
@@ -48,12 +55,12 @@ internal class FlickGestureDetector {
 
         val value = when (pendingAxis) {
             Axis.X -> x
-            Axis.Y -> y
+            Axis.Z -> z
             Axis.NONE -> return null
         }
         val orthogonalAbs = when (pendingAxis) {
             Axis.X -> max(abs(y), abs(z))
-            Axis.Y -> max(abs(x), abs(z))
+            Axis.Z -> max(abs(x), abs(y))
             Axis.NONE -> return null
         }
         val direction = signedDirection(value)
@@ -71,10 +78,11 @@ internal class FlickGestureDetector {
         ) {
             val gesture = when (pendingAxis) {
                 Axis.X -> if (pendingDirection > 0) Gesture.RIGHT else Gesture.LEFT
-                Axis.Y -> if (pendingDirection > 0) Gesture.DOWN else Gesture.UP
+                Axis.Z -> if (pendingDirection > 0) Gesture.DOWN else Gesture.UP
                 Axis.NONE -> return null
             }
             lastGestureAtMs = nowMs
+            armed = false
             clearPending()
             return gesture
         }
@@ -83,8 +91,36 @@ internal class FlickGestureDetector {
     }
 
     fun reset() {
+        armed = true
         clearPending()
         lastGestureAtMs = null
+    }
+
+    private fun rearmIfSettled(x: Float, y: Float, z: Float) {
+        if (max(max(abs(x), abs(y)), abs(z)) <= REARM_THRESHOLD) {
+            armed = true
+        }
+    }
+
+    private fun immediateGestureIfEligible(nowMs: Long, x: Float, y: Float, z: Float): Gesture? {
+        val lastGesture = lastGestureAtMs
+        if (lastGesture != null && nowMs - lastGesture < COOLDOWN_MS) return null
+
+        val absX = abs(x)
+        val absY = abs(y)
+        val absZ = abs(z)
+        val gesture = when {
+            absX >= START_THRESHOLD &&
+                absX >= max(absY, absZ) * AXIS_DOMINANCE_RATIO -> if (x >= 0f) Gesture.RIGHT else Gesture.LEFT
+            absZ >= START_THRESHOLD &&
+                absZ >= max(absX, absY) * AXIS_DOMINANCE_RATIO -> if (z >= 0f) Gesture.DOWN else Gesture.UP
+            else -> null
+        } ?: return null
+
+        lastGestureAtMs = nowMs
+        armed = false
+        clearPending()
+        return gesture
     }
 
     private fun beginGestureIfEligible(nowMs: Long, x: Float, y: Float, z: Float) {
@@ -102,10 +138,10 @@ internal class FlickGestureDetector {
                 axis = Axis.X
                 value = x
             }
-            absY >= absX && absY >= absZ &&
-                absY >= max(absX, absZ) * AXIS_DOMINANCE_RATIO -> {
-                axis = Axis.Y
-                value = y
+            absZ >= absX && absZ >= absY &&
+                absZ >= max(absX, absY) * AXIS_DOMINANCE_RATIO -> {
+                axis = Axis.Z
+                value = z
             }
             else -> return
         }
