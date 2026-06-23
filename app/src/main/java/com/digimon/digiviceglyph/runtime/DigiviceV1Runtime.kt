@@ -2212,6 +2212,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             session.escaped = true
             session.resultText = "ESC"
             state.defeat = false
+            activateHappyIdle(durationMs = 8_000L) // GML: is_happy = true on flee success
         } else {
             session.escaped = false
             session.resultText = "FAIL"
