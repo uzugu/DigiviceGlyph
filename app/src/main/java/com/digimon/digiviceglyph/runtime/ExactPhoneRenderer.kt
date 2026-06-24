@@ -135,6 +135,11 @@ class ExactPhoneRenderer(
         private const val GLYPH_CLOCK_DIGIT_GAP = 1
         private const val GLYPH_CLOCK_TOP = 0
         private const val GLYPH_CLOCK_BOTTOM = 21
+
+        fun idleSpriteFrame(): Int {
+            // GML image_speed=1 at 60fps: 2-frame sprite, each frame = 1.0s
+            return ((System.currentTimeMillis() / 1_000L) % 2).toInt()
+        }
         private val GLYPH_CLOCK_DIGITS = arrayOf(
             // 0
             arrayOf("010", "101", "010", "000"),
@@ -383,7 +388,7 @@ class ExactPhoneRenderer(
             snapshot.stepActive -> STEP_SPRITES[snapshot.currentChar]
             else -> BASE_SPRITES[snapshot.currentChar]
         }
-        drawContentSprite(spriteName, 8, 0, frameCounter / 8)
+        drawContentSprite(spriteName, 8, 0, idleSpriteFrame())
         if (snapshot.happy && !snapshot.happyAnimation) {
             drawContentSprite("spr_happy", 24, 0)
         } else if (snapshot.defeat) {

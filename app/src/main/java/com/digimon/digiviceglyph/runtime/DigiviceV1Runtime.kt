@@ -98,7 +98,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var pendingMineHp: Int? = null,
         var pendingEnemyHp: Int? = null,
         var pendingTurn: Int? = null,
-        var defenseSoundPlayed: Boolean = false,
+        var hitSoundPlayed: Boolean = false,
         var damageSoundPlayed: Boolean = false
     )
 
@@ -202,7 +202,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         private const val PHONE_HEIGHT = 160
         private const val ON = Color.WHITE
         private const val OFF = Color.BLACK
-        private const val AUTORUN_STEP_INTERVAL_MS = 1000L
+        private const val AUTORUN_STEP_INTERVAL_MS = 3000L  // GML alarm[0]=180 at 60fps → 3.0s
         private const val SLOT_FAST_MS = 200L
         private const val SLOT_SLOW_MS = 800L
         private const val SLOT_RESULT_DELAY_MS = 8000L
@@ -213,7 +213,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         private const val CARD_RESULT_DELAY_MS = 8000L
         private const val CARD_BLINK_MS = 1000L
         private const val PUSH_ALARM_TICKS = 300
-        private const val PUSH_WINDOW_MS = 10_000L
+        private const val PUSH_WINDOW_MS = 5_000L  // GML alarm[0]=300 at 60fps → 5.0s
         private const val DEFAULT_FRAME_INTERVAL_MS = 90L
         private const val PRECISE_SCENE_FRAME_INTERVAL_MS = 50L
         private val STEP_MULTIPLIERS = intArrayOf(1, 3, 5, 10, 25, 50)
@@ -384,18 +384,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
 
         /* ---- tick-based battle advancement ---- */
-        // Each phase-tick = one render call during battle.
-        // At the default 90ms frame interval that's ~11 ticks/sec; at 50ms it's 20 ticks/sec.
-        // For deterministic timing we normalise to a virtual 10Hz tick (100ms) —
-        // `advancePhaseTick()` accumulates real time and only increments when 100ms has passed.
+        // GML ran at room_speed=60 (GM2 Android default). Conversion: GML_frames / 60 * 10 = ticks.
+        // Virtual tick = 100ms (10Hz). GML alarm N → N/60 seconds → N/6 ticks (rounded up).
 
         internal const val VIRTUAL_TICK_MS = 100L          // 10Hz virtual tick
-        internal const val READY_GO_TICKS_PER_FRAME = 60   // 60 ticks = 6 seconds per frame
-        internal const val RESULT_TICKS_PER_BLINK = 10     // 10 ticks = 1 second blink
-        internal const val PUSH_TICKS_PER_ALARM_TICK = 10  // 10 ticks per alarm countdown tick
-        internal const val FINISH_SLIDE_TICKS_PER_STEP = 1 // 1 slide step per tick (100ms)
-        internal const val DEVOLVE_TICKS_PER_STAGE = 10    // normal stage: 10 ticks = 1s
-        internal const val DEVOLVE_TICKS_PER_FAST_STAGE = 5 // fast stage: 5 ticks = 500ms
+        internal const val READY_GO_TICKS_PER_FRAME = 30   // GML alarm[0]=180 → 180/6=30 ticks = 3.0s per frame
+        internal const val RESULT_TICKS_PER_BLINK = 5      // GML blink ≈ 30 frames → 30/6=5 ticks = 0.5s
+        internal const val PUSH_TICKS_PER_ALARM_TICK = 5   // 5 ticks per alarm countdown tick
+        internal const val FINISH_SLIDE_TICKS_PER_STEP = 1 // GML alarm[0]=3 → 3/6=0.5 ticks → rounded to 1
+        internal const val DEVOLVE_TICKS_PER_STAGE = 5     // GML alarm[0]=30 → 30/6=5 ticks = 0.5s
+        internal const val DEVOLVE_TICKS_PER_FAST_STAGE = 3 // GML alarm[0]=15 → 15/6=2.5 → rounded to 3
 
         internal fun advancePhaseTick(session: BattleSession, nowMs: Long) {
             val elapsed = (nowMs - session.phaseStartedAtMs).coerceAtLeast(0L)
@@ -420,7 +418,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             var hitTriggered = false
             var damageApplied = false
 
-            val introTicks = (1_000L / VIRTUAL_TICK_MS).toInt() // 10
+            // GML at 60fps: alarm[0]=30 → 0.5s → 5 ticks
+            val introTicks = (500L / VIRTUAL_TICK_MS).toInt() // 5
             if (remaining < introTicks) return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied, finished = false)
             remaining -= introTicks
             animation = true
@@ -428,7 +427,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
             // GML mine_attack turno 1-16: depends on current_evo only (alarm 6/12, turno++/+=2)
             // GML enemy_attack turno 1-16: depends on boss only (alarm 6/12, turno++/+=2)
-            val firstStepTicks = if ((mineAttack && currentEvo > 0) || (boss && !mineAttack)) 4 else 2
+            val firstStepTicks = if ((mineAttack && currentEvo > 0) || (boss && !mineAttack)) 2 else 1
             val firstTurnIncrement = if ((mineAttack && currentEvo > 0) || (boss && !mineAttack)) 2 else 1
 
             while (turn in 1..16 && remaining >= firstStepTicks) {
@@ -439,14 +438,14 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 remaining -= firstStepTicks
             }
 
-            val transitionTicks = (200L / VIRTUAL_TICK_MS).toInt() // 2
+            val transitionTicks = (100L / VIRTUAL_TICK_MS).toInt() // 1
             if (turn == 17 && remaining >= transitionTicks) {
                 remaining -= transitionTicks
                 turn = 18
                 posX = 0
             }
 
-            val secondStepTicks = if ((mineAttack && boss) || (!mineAttack && currentEvo != 0)) 4 else 2
+            val secondStepTicks = if ((mineAttack && boss) || (!mineAttack && currentEvo != 0)) 2 else 1
             val secondTurnIncrement = if ((mineAttack && boss) || (!mineAttack && currentEvo != 0)) 2 else 1
 
             while (turn in 18..36 && remaining >= secondStepTicks) {
@@ -455,24 +454,27 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 remaining -= secondStepTicks
             }
 
-            val animTicks = (400L / VIRTUAL_TICK_MS).toInt() // 4
+            val animTicks = (200L / VIRTUAL_TICK_MS).toInt() // 2
             while (turn in 37..45 && remaining >= animTicks) {
                 animation = !animation
                 turn += 1
                 remaining -= animTicks
             }
 
-            // GML turno 46: alarm[0]=90 frames = 3.0s → 30 ticks
-            // GML turno 47: alarm[0]=90 frames = 3.0s → 30 ticks, applies damage
-            // GML turno 48: sets alarm[0]=90 but destroys self immediately — no pause
-            val pauseTicks = (3_000L / VIRTUAL_TICK_MS).toInt() // 30
+            // GML at 60fps: alarm[0]=90 → 1.5s → 15 ticks
+            // turno 46: show old HP, wait 1.5s
+            // turno 47: deduct HP (damageApplied=true), show new HP, wait 1.5s
+            // turno 48: immediate transition
+            val pauseTicks = (1_500L / VIRTUAL_TICK_MS).toInt() // 15
             if (turn == 46 && remaining >= pauseTicks) {
                 remaining -= pauseTicks
                 turn = 47
             }
+            if (turn == 47) {
+                damageApplied = true // deduct HP at the start of turno 47
+            }
             if (turn == 47 && remaining >= pauseTicks) {
                 remaining -= pauseTicks
-                damageApplied = true
                 turn = 48
             }
             if (turn >= 48) {
@@ -492,10 +494,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
 
         internal fun pushStateForTick(tick: Int): PushState {
-            // PUSH_WINDOW_MS = 30_000ms → 300 ticks. PUSH_ALARM_TICKS = 20.
-            // Each alarm tick = PUSH_WINDOW_MS / PUSH_ALARM_TICKS = 1500ms = 15 virtual ticks
-            val pushWindowTicks = (PUSH_WINDOW_MS / VIRTUAL_TICK_MS).toInt() // 300
-            val ticksPerAlarm = (pushWindowTicks + PUSH_ALARM_TICKS - 1) / PUSH_ALARM_TICKS // ceil
+            // GML alarm[0]=300 at 60fps → 5.0s → 50 ticks
+            val pushWindowTicks = (PUSH_WINDOW_MS / VIRTUAL_TICK_MS).toInt() // 50
             val finished = tick >= pushWindowTicks
             val elapsedAlarmTicks = (tick * PUSH_ALARM_TICKS / pushWindowTicks).coerceIn(0, PUSH_ALARM_TICKS)
             return PushState(
@@ -505,6 +505,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
 
         internal fun evoSequenceStateForTick(tick: Int): EvoSequenceState {
+            // GML at 60fps: alarm[0]=12→0.2s(2 ticks), 30→0.5s(5 ticks), 60→1.0s(10 ticks)
             var remaining = tick
             var currentMenu = 0
             var animation = false
@@ -513,46 +514,46 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             while (true) {
                 when {
                     currentMenu < 11 -> {
-                        val step = (400L / VIRTUAL_TICK_MS).toInt() // 4
+                        val step = (200L / VIRTUAL_TICK_MS).toInt() // 2 (GML alarm=12)
                         if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
                         remaining -= step
                         currentMenu += 1
                     }
                     currentMenu in 11..15 -> {
-                        val step = (1_000L / VIRTUAL_TICK_MS).toInt() // 10
+                        val step = (500L / VIRTUAL_TICK_MS).toInt() // 5 (GML alarm=30)
                         if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
                         remaining -= step
                         animation = !animation
                         currentMenu += 1
                     }
                     currentMenu in 16..18 -> {
-                        val step = (2_000L / VIRTUAL_TICK_MS).toInt() // 20
+                        val step = (1_000L / VIRTUAL_TICK_MS).toInt() // 10 (GML alarm=60)
                         if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
                         remaining -= step
                         currentMenu += 1
                     }
                     currentMenu in 19..24 -> {
-                        val step = (400L / VIRTUAL_TICK_MS).toInt() // 4
+                        val step = (200L / VIRTUAL_TICK_MS).toInt() // 2 (GML alarm=12)
                         if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
                         remaining -= step
                         animation = !animation
                         currentMenu += 1
                     }
                     currentMenu == 25 -> {
-                        val step = (2_000L / VIRTUAL_TICK_MS).toInt() // 20
+                        val step = (1_000L / VIRTUAL_TICK_MS).toInt() // 10 (GML alarm=60)
                         if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
                         remaining -= step
                         currentMenu = 26
                     }
                     currentMenu in 26..27 -> {
-                        val step = (2_000L / VIRTUAL_TICK_MS).toInt() // 20
+                        val step = (1_000L / VIRTUAL_TICK_MS).toInt() // 10 (GML alarm=60)
                         if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
                         remaining -= step
                         posY += 4
                         currentMenu += 1
                     }
                     currentMenu == 28 -> {
-                        val step = (2_000L / VIRTUAL_TICK_MS).toInt() // 20
+                        val step = (1_000L / VIRTUAL_TICK_MS).toInt() // 10 (GML alarm=60)
                         if (remaining < step) return EvoSequenceState(currentMenu, animation, posY, finished = false)
                         remaining -= step
                         currentMenu = 29
@@ -566,12 +567,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             if (currentEvo <= 0) return FinishDevolveState(0, false, finished = true)
 
             var remaining = tick
+            // GML at 60fps: alarm=30→0.5s(5 ticks), 120→2.0s(20 ticks), 15→0.25s(3 ticks)
             val stages = listOf(
-                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, false),   // 1s
-                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, true),    // 1s
-                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, false),   // 1s
-                Triple(DEVOLVE_TICKS_PER_STAGE * 4, currentEvo, true),// 4s
-                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, true),        // 500ms
+                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, false),   // 0.5s (alarm=30)
+                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, true),    // 0.5s (alarm=30)
+                Triple(DEVOLVE_TICKS_PER_STAGE, currentEvo, false),   // 0.5s (alarm=30)
+                Triple(DEVOLVE_TICKS_PER_STAGE * 4, currentEvo, true),// 2.0s (alarm=120)
+                Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, true),        // 0.25s (alarm=15)
                 Triple(DEVOLVE_TICKS_PER_FAST_STAGE, currentEvo, true),
                 Triple(DEVOLVE_TICKS_PER_FAST_STAGE, 0, true),
                 Triple(DEVOLVE_TICKS_PER_FAST_STAGE, currentEvo, true),
@@ -592,7 +594,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
 
         internal fun finishSlideStateForTick(tick: Int): FinishSlideState {
-            val steps = tick.coerceIn(0, 24)
+            // GML alarm[0]=3 at 60fps → 0.05s per step, 24 steps → ~1.2s → 12 ticks
+            val steps = (tick / 2).coerceIn(0, 24) // 2 ticks per step → 12 ticks total
             return FinishSlideState(
                 posX = 32 - steps,
                 finished = steps >= 24
@@ -600,6 +603,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
 
         internal fun resultBlinkStateForTick(tick: Int, playerWon: Boolean): ResultBlinkState {
+            // GML: won=8s→80 ticks, lost=9s→90 ticks (RESULT_TICKS_PER_BLINK=5 → 0.5s blink)
             val durationTicks = if (playerWon) 80 else 90 // 8s / 9s in ticks
             if (tick >= durationTicks) return ResultBlinkState(false, finished = true)
             val blink = ((tick / RESULT_TICKS_PER_BLINK) % 2) == 1
@@ -612,59 +616,59 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             if (boss) {
                 return startSlideStateForTick(tick)
             }
-            // 16px enemy — matches GML alarms at 30fps converted to 10Hz ticks (1 tick = 100ms):
-            //   alarm[0] = 5  frames  →  blink toggle every ~2 ticks  (5/30 * 10 ≈ 2)
-            //   alarm[1] = 30 frames  →  stop blink at tick 10       (30/30 * 10 = 10)
-            //   alarm[2] = 60 frames  →  first fire at tick 20, then every 10 ticks
-            //                          →  counter reaches 2 at tick 30 → transition
-            val blinkVisible = if (tick < 10) {
-                // blink toggle every 2 ticks until alarm[1] stops it at tick 10
-                (tick / 2) % 2 == 0
+            // 16px enemy — GML alarms at 60fps converted to 10Hz ticks:
+            //   alarm[0] = 5  → blink toggle every ~1 tick     (5/60*10 ≈ 1)
+            //   alarm[1] = 30 → stop blink at tick 5           (30/60*10 = 5)
+            //   alarm[2] = 60 → first fire at tick 10, then every 10 ticks
+            //                   counter reaches 2 at tick 20 → transition
+            val blinkVisible = if (tick < 5) {
+                // blink toggle every 1 tick until alarm[1] stops it at tick 5
+                (tick / 1) % 2 == 0
             } else {
-                // after tick 10, alarm[0] = -1, animation stays true (visible)
+                // after tick 5, alarm[0] = -1, animation stays true (visible)
                 true
             }
             return StartBlinkState(
                 blinkVisible = blinkVisible,
                 slideX = 0,
                 slideY = 0,
-                finished = tick >= 30
+                finished = tick >= 20
             )
         }
 
         private fun startSlideStateForTick(tick: Int): StartBlinkState {
-            // 24px boss — matches GML alarm[3] slide + alarm[4] transition at 30fps → 10Hz:
-            //   x-slide: -16→-1 in 15 steps×3fr = 45fr (1.5s → 15 ticks),
-            //            -1→0 in 1 step×30fr = 30fr (1.0s → 10 ticks)  total x = 25 ticks
-            //   y-slide: -8→-4 in 30fr (1.0s → 10 ticks),
-            //            -4→0 in 30fr (1.0s → 10 ticks)  total y = 20 ticks, done at tick 45
-            //   then alarm[4] = 60 frames (2.0s → 20 ticks), counter=1 at tick 65 → transition
+            // 24px boss — GML alarm[3] slide + alarm[4] transition at 60fps → 10Hz:
+            //   x-slide: -16→-1 in 15 steps×3fr = 45fr (0.75s → 8 ticks),
+            //            -1→0 in 1 step×30fr = 30fr (0.5s → 5 ticks)  total x = 13 ticks
+            //   y-slide: -8→-4 in 30fr (0.5s → 5 ticks),
+            //            -4→0 in 30fr (0.5s → 5 ticks)  total y = 10 ticks, done at tick 23
+            //   then alarm[4] = 60 frames (1.0s → 10 ticks), counter=1 at tick 33 → transition
 
-            // X-slide phase: ticks 0-24
-            if (tick < 15) {
-                // fast x-slide: -16→-1, 15 steps, 1 tick each
-                val slideX = -16 + tick
-                return StartBlinkState(blinkVisible = true, slideX = slideX, slideY = -8, finished = false)
-            } else if (tick < 25) {
-                // slow pause at x=-1→0 (alarm[3] = 30), stay at -1 until tick 25
+            // X-slide phase: ticks 0-12
+            if (tick < 8) {
+                // fast x-slide: -16→-1
+                val slideX = -16 + (tick * 15 / 8)
+                return StartBlinkState(blinkVisible = true, slideX = slideX.coerceAtMost(-1), slideY = -8, finished = false)
+            } else if (tick < 13) {
+                // slow step: -1→0 (alarm[3] = 30)
                 return StartBlinkState(blinkVisible = true, slideX = -1, slideY = -8, finished = false)
             }
 
-            // Y-slide phase: ticks 25-44
-            if (tick < 35) {
-                // y = -8, stay here 10 ticks
+            // Y-slide phase: ticks 13-22
+            if (tick < 18) {
+                // y = -8, stay here 5 ticks
                 return StartBlinkState(blinkVisible = true, slideX = 0, slideY = -8, finished = false)
-            } else if (tick < 45) {
-                // y = -4, stay here 10 ticks
+            } else if (tick < 23) {
+                // y = -4, stay here 5 ticks
                 return StartBlinkState(blinkVisible = true, slideX = 0, slideY = -4, finished = false)
             }
 
-            // Post-slide: enemy visible at (0,0), transition at tick 65
+            // Post-slide: enemy visible at (0,0), transition at tick 33
             return StartBlinkState(
                 blinkVisible = true,
                 slideX = 0,
                 slideY = 0,
-                finished = tick >= 65
+                finished = tick >= 33
             )
         }
 
@@ -681,18 +685,19 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             var hitTriggered = false
             var damageApplied = false
 
-            if (remainingMs < 1_000L) {
+            // GML at 60fps: alarm=30→500ms, 6→100ms, 12→200ms, 90→1500ms
+            if (remainingMs < 500L) {
                 return AttackTimelineState(turn, posX, animation, hitTriggered, damageApplied, finished = false)
             }
 
-            remainingMs -= 1_000L
+            remainingMs -= 500L
             animation = true
             turn = 1
 
             val firstStepMs = if (mineAttack) {
-                if (currentEvo > 0) 400L else 200L
+                if (currentEvo > 0) 200L else 100L
             } else {
-                if (boss) 400L else 200L
+                if (boss) 200L else 100L
             }
             val firstTurnIncrement = if (mineAttack) {
                 if (currentEvo > 0) 2 else 1
@@ -712,16 +717,16 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 remainingMs -= firstStepMs
             }
 
-            if (turn == 17 && remainingMs >= 200L) {
-                remainingMs -= 200L
+            if (turn == 17 && remainingMs >= 100L) {
+                remainingMs -= 100L
                 turn = 18
                 posX = 0
             }
 
             val secondStepMs = if (mineAttack) {
-                if (boss) 400L else 200L
+                if (boss) 200L else 100L
             } else {
-                if (currentEvo != 0) 400L else 200L
+                if (currentEvo != 0) 200L else 100L
             }
             val secondTurnIncrement = if (mineAttack) {
                 if (boss) 2 else 1
@@ -735,22 +740,25 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 remainingMs -= secondStepMs
             }
 
-            while (turn in 37..45 && remainingMs >= 400L) {
+            while (turn in 37..45 && remainingMs >= 200L) {
                 animation = !animation
                 turn += 1
-                remainingMs -= 400L
+                remainingMs -= 200L
             }
 
-            // GML turno 46: alarm[0]=90 frames = 3.0s
-            // GML turno 47: alarm[0]=90 frames = 3.0s, applies damage
-            // GML turno 48: immediate transition (alarm set but self destroyed before fire)
-            if (turn == 46 && remainingMs >= 3_000L) {
-                remainingMs -= 3_000L
+            // GML at 60fps: alarm[0]=90 → 1.5s
+            // turno 46: show old HP, wait 1.5s
+            // turno 47: deduct HP (damageApplied=true), show new HP, wait 1.5s
+            // turno 48: immediate transition
+            if (turn == 46 && remainingMs >= 1_500L) {
+                remainingMs -= 1_500L
                 turn = 47
             }
-            if (turn == 47 && remainingMs >= 3_000L) {
-                remainingMs -= 3_000L
-                damageApplied = true
+            if (turn == 47) {
+                damageApplied = true // deduct HP at the start of turno 47
+            }
+            if (turn == 47 && remainingMs >= 1_500L) {
+                remainingMs -= 1_500L
                 turn = 48
             }
             if (turn >= 48) {
@@ -762,9 +770,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
 
         internal fun computeReadyGoState(elapsedMs: Long): ReadyGoState {
+            // GML alarm[0]=180 at 60fps → 3.0s per frame, 2 frames = 6.0s total
             return when {
-                elapsedMs < 6_000L -> ReadyGoState(frame = 0, finished = false)
-                elapsedMs < 12_000L -> ReadyGoState(frame = 1, finished = false)
+                elapsedMs < 3_000L -> ReadyGoState(frame = 0, finished = false)
+                elapsedMs < 6_000L -> ReadyGoState(frame = 1, finished = false)
                 else -> ReadyGoState(frame = 1, finished = true)
             }
         }
@@ -781,6 +790,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
 
         internal fun computeEvoSequenceState(elapsedMs: Long): EvoSequenceState {
+            // GML at 60fps: alarm=12→200ms, 30→500ms, 60→1000ms
             var remainingMs = elapsedMs.coerceAtLeast(0L)
             var currentMenu = 0
             var animation = false
@@ -789,41 +799,41 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             while (true) {
                 when {
                     currentMenu < 11 -> {
-                        if (remainingMs < 400L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
-                        remainingMs -= 400L
+                        if (remainingMs < 200L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 200L
                         currentMenu += 1
                     }
                     currentMenu in 11..15 -> {
-                        if (remainingMs < 1_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
-                        remainingMs -= 1_000L
+                        if (remainingMs < 500L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 500L
                         animation = !animation
                         currentMenu += 1
                     }
                     currentMenu in 16..18 -> {
-                        if (remainingMs < 2_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
-                        remainingMs -= 2_000L
+                        if (remainingMs < 1_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 1_000L
                         currentMenu += 1
                     }
                     currentMenu in 19..24 -> {
-                        if (remainingMs < 400L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
-                        remainingMs -= 400L
+                        if (remainingMs < 200L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 200L
                         animation = !animation
                         currentMenu += 1
                     }
                     currentMenu == 25 -> {
-                        if (remainingMs < 2_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
-                        remainingMs -= 2_000L
+                        if (remainingMs < 1_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 1_000L
                         currentMenu = 26
                     }
                     currentMenu in 26..27 -> {
-                        if (remainingMs < 2_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
-                        remainingMs -= 2_000L
+                        if (remainingMs < 1_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 1_000L
                         posY += 4
                         currentMenu += 1
                     }
                     currentMenu == 28 -> {
-                        if (remainingMs < 2_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
-                        remainingMs -= 2_000L
+                        if (remainingMs < 1_000L) return EvoSequenceState(currentMenu, animation, posY, finished = false)
+                        remainingMs -= 1_000L
                         currentMenu = 29
                     }
                     else -> return EvoSequenceState(currentMenu, animation, posY, finished = true)
@@ -836,23 +846,24 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 return FinishDevolveState(displayedEvo = 0, drawFilter = false, finished = true)
             }
 
+            // GML at 60fps: alarm=30→500ms, 120→2000ms, 15→250ms
             var remainingMs = elapsedMs.coerceAtLeast(0L)
             val stages = listOf(
-                Triple(1_000L, currentEvo, false),
-                Triple(1_000L, currentEvo, true),
-                Triple(1_000L, currentEvo, false),
-                Triple(4_000L, currentEvo, true),
-                Triple(500L, 0, true),
+                Triple(500L, currentEvo, false),
                 Triple(500L, currentEvo, true),
-                Triple(500L, 0, true),
-                Triple(500L, currentEvo, true),
-                Triple(500L, 0, false),
-                Triple(500L, 0, true),
-                Triple(500L, 0, false),
-                Triple(500L, 0, true),
-                Triple(500L, 0, false),
-                Triple(500L, 0, true),
-                Triple(500L, 0, false)
+                Triple(500L, currentEvo, false),
+                Triple(2_000L, currentEvo, true),
+                Triple(250L, 0, true),
+                Triple(250L, currentEvo, true),
+                Triple(250L, 0, true),
+                Triple(250L, currentEvo, true),
+                Triple(250L, 0, false),
+                Triple(250L, 0, true),
+                Triple(250L, 0, false),
+                Triple(250L, 0, true),
+                Triple(250L, 0, false),
+                Triple(250L, 0, true),
+                Triple(250L, 0, false)
             )
 
             for ((durationMs, displayedEvo, drawFilter) in stages) {
@@ -866,8 +877,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         }
 
         internal fun computeFinishSlideState(elapsedMs: Long): FinishSlideState {
+            // GML alarm[0]=3 at 60fps → 50ms per step, 24 steps → 1.2s
             val clampedElapsedMs = elapsedMs.coerceAtLeast(0L)
-            val steps = (clampedElapsedMs / 100L).toInt().coerceAtMost(24)
+            val steps = (clampedElapsedMs / 50L).toInt().coerceAtMost(24)
             return FinishSlideState(
                 posX = 32 - steps,
                 finished = steps >= 24
@@ -879,7 +891,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             if (elapsedMs >= durationMs) {
                 return ResultBlinkState(animation = false, finished = true)
             }
-            val animation = ((elapsedMs / 1_000L) % 2L) == 1L
+            // GML blink ≈ 30 frames at 60fps → 500ms
+            val animation = ((elapsedMs / 500L) % 2L) == 1L
             return ResultBlinkState(animation = animation, finished = false)
         }
     }
@@ -958,7 +971,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private var idleClockEnabled = false
     private var lastBackPressAtMs: Long = 0L
     private val ALERT_FLEE_WINDOW_MS = 600L
-    private val STEP_POSE_DURATION_MS = 6_000L
+    private val STEP_POSE_DURATION_MS = 3_000L  // GML alarm[0]=180 at 60fps → 3.0s
 
     override fun onButtonDown(button: GlyphButton) {
         lastActionLabel = button.name
@@ -1285,7 +1298,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             4 -> {
                 if (state.defeat) {
                     medicalRecoveryPending = true
-                    activateHappyIdle(durationMs = 8_000L)
+                    activateHappyIdle(durationMs = 4_000L) // GML alarm[2]=240 at 60fps → 4.0s
                     screen = Screen.IDLE
                     saveState()
                 } else {
@@ -1864,13 +1877,17 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> {
                 val mineAttack = session.phase == BattlePhase.MINE_ATTACK
                 val timeline = compute.attackTimelineForTick(tick, session.currentEvo, session.boss, mineAttack)
-                if (!session.defenseSoundPlayed && timeline.turn >= 18) {
-                    session.defenseSoundPlayed = true
-                    playSound(DigiviceAudioManager.Cue.ATTACK_DEFENSE)
+                // GML turno 3: audio_stop_all(); audio_play_sound(sound_hit_digivice) — sustained hit during travel
+                if (!session.hitSoundPlayed && timeline.hitTriggered) {
+                    session.hitSoundPlayed = true
+                    audioManager.stopAll()
+                    playSound(DigiviceAudioManager.Cue.HIT)
                 }
+                // GML turno 47: audio_stop_all(); audio_play_sound(sound_select) — HP deduction
                 if (!session.damageSoundPlayed && timeline.damageApplied) {
                     session.damageSoundPlayed = true
-                    playSound(DigiviceAudioManager.Cue.ATTACK_HIT)
+                    audioManager.stopAll()
+                    playSound(DigiviceAudioManager.Cue.SELECT)
                 }
                 if (timeline.finished) {
                     completeAttackAnimation()
@@ -2002,7 +2019,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
         finishReturnX = 32
         finishReturnNextAtMs = 0L
-        activateHappyIdle(durationMs = 8_000L)
+        activateHappyIdle(durationMs = 4_000L) // GML alarm[2]=240 at 60fps → 4.0s
         screen = Screen.IDLE
         saveState()
     }
@@ -2029,11 +2046,19 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     private fun isHappyIdleAnimationFrame(): Boolean {
         if (!isHappyIdleActive()) return false
+        // GML alarm[1]=30 at 60fps → 0.5s toggle between normal/happy sprite
         val elapsedMs = System.currentTimeMillis() - happyStartedAtMs
-        return ((elapsedMs / 1_000L) % 2L) == 1L
+        return ((elapsedMs / 500L) % 2L) == 1L
     }
 
     private fun isStepPoseActive(): Boolean = stepPoseEndsAtMs != 0L && System.currentTimeMillis() < stepPoseEndsAtMs
+
+    private fun idleSpriteFrame(): Int {
+        // GML image_speed=1 at 60fps: 2-frame sprite, each frame = 60/60 = 1.0s
+        // Our frameCounter increments at 90ms intervals, so 1.0s = 11 ticks → divisor 11
+        // But to be render-rate independent, use time-based:
+        return ((System.currentTimeMillis() / 1_000L) % 2).toInt()
+    }
 
     private fun performSingleStep() {
         if (!acceptsStepProgressOnCurrentScreen() || state.defeat || state.connectMode || state.battlePending) return
@@ -2212,7 +2237,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             session.escaped = true
             session.resultText = "ESC"
             state.defeat = false
-            activateHappyIdle(durationMs = 8_000L) // GML: is_happy = true on flee success
+            activateHappyIdle(durationMs = 4_000L) // GML alarm[2]=240 at 60fps → 4.0s
         } else {
             session.escaped = false
             session.resultText = "FAIL"
@@ -2452,7 +2477,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         session.phase = phase
         session.phaseStartedAtMs = System.currentTimeMillis()
         session.phaseTick = 0
-        session.defenseSoundPlayed = false
+        session.hitSoundPlayed = false
         session.damageSoundPlayed = false
         if (phase != BattlePhase.MINE_ATTACK) {
             session.pendingEnemyHp = null
@@ -2468,7 +2493,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             BattlePhase.START -> playSound(DigiviceAudioManager.Cue.ALERT_OLD)
             BattlePhase.READY_GO -> playSound(DigiviceAudioManager.Cue.READY_GO)
             BattlePhase.EVO_SEQUENCE -> playSound(DigiviceAudioManager.Cue.EVO)
-            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> playSound(DigiviceAudioManager.Cue.ATTACK)
+            BattlePhase.MINE_ATTACK, BattlePhase.ENEMY_ATTACK -> Unit // GML: no sound at attack start; HIT at turno 3, SELECT at turno 47
             BattlePhase.RESULT -> {
                 if (session.resultText == "WIN") {
                     playSound(DigiviceAudioManager.Cue.HAPPY)
@@ -2864,7 +2889,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             isStepPoseActive() -> STEP_SPRITES[state.currentChar]
             else -> BASE_SPRITES[state.currentChar]
         }
-        drawAssetSprite(spriteName, 14, 7, 10, 10, frameCounter / 8)
+        drawAssetSprite(spriteName, 14, 7, 10, 10, idleSpriteFrame())
         drawText(state.distance.coerceAtLeast(0).toString().padStart(4, '0').takeLast(4), 3, 13)
         drawText("P${state.dpower.toString().padStart(2, '0')}", 3, 19)
         val marker = when {
@@ -2984,10 +3009,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         drawText(if (session.boss) "BOSS" else "BTTL", 2, 5)
         when (session.phase) {
             BattlePhase.ALERT -> {
-                // GML alarm[1]=10 frames (0.33s) toggles alert text visibility
-                // GML alarm[0]=30 frames (1.0s) toggles Digimon sprite frame
-                val alertTextVisible = ((session.phaseTick / 3) / 2) % 2 == 0 // 3 ticks ≈ 0.33s
-                val digimonFrame = (session.phaseTick / 10) % 2 // 10 ticks = 1.0s
+                // GML at 60fps: alarm[1]=10 → 0.17s (2 ticks) toggles alert text
+                // GML at 60fps: alarm[0]=30 → 0.5s (5 ticks) toggles Digimon sprite
+                val alertTextVisible = ((session.phaseTick / 2) / 2) % 2 == 0 // 2 ticks = 0.2s
+                val digimonFrame = (session.phaseTick / 5) % 2 // 5 ticks = 0.5s
                 if (alertTextVisible) {
                     drawAssetSprite("spr_battle_alert_digivice_v1", 2, 9, 20, 7)
                 }
@@ -3212,7 +3237,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             isStepPoseActive() -> STEP_SPRITES[state.currentChar]
             else -> BASE_SPRITES[state.currentChar]
         }
-        drawPhoneAssetSprite(spriteName, screenRect.left.toInt() + 88, screenRect.top.toInt() + 20, 40, 40, frameCounter / 8)
+        drawPhoneAssetSprite(spriteName, screenRect.left.toInt() + 88, screenRect.top.toInt() + 20, 40, 40, idleSpriteFrame())
         phoneCanvas.drawText(state.currentProfile().name, screenRect.left + 14f, screenRect.top + 20f, phoneTextPaint)
         phoneCanvas.drawText("Distance ${state.distance}", screenRect.left + 14f, screenRect.top + 46f, phoneSmallTextPaint)
         phoneCanvas.drawText("Steps ${state.steps}", screenRect.left + 14f, screenRect.top + 62f, phoneSmallTextPaint)
