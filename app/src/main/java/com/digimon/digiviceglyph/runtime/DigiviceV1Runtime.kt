@@ -175,6 +175,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         var nextReel1AtMs: Long = 0L,
         var nextReel2AtMs: Long = 0L,
         var nextAnimationAtMs: Long = 0L,
+        var nextResultSoundAtMs: Long = 0L,
         var nextPhaseAtMs: Long = 0L
     )
 
@@ -203,10 +204,13 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
         private const val ON = Color.WHITE
         private const val OFF = Color.BLACK
         private const val AUTORUN_STEP_INTERVAL_MS = 3000L  // GML alarm[0]=180 at 60fps → 3.0s
-        private const val SLOT_FAST_MS = 200L
-        private const val SLOT_SLOW_MS = 800L
-        private const val SLOT_RESULT_DELAY_MS = 8000L
-        private const val SLOT_BLINK_MS = 1000L
+        private const val SLOT_FAST_MS = 100L // V1 KeyPress_38/Alarm_0/1: 6 frames at original 60fps.
+        private const val SLOT_STOP_REARM_MS = 200L // V1 KeyPress_38: alarm[0/1]=12 at 60fps.
+        private const val SLOT_SLOW_MS = 400L // V1 Alarm_0/1: 24 frames at original 60fps.
+        private const val SLOT_RESULT_DELAY_MS = 4000L // V1 Step_0 alarm[2]=240, original GMS2FPS=60.
+        private const val SLOT_RESULT_SOUND_DELAY_MS = 500L // V1 Step_0 alarm[3]=30 at 60fps; Alarm_3 is one-shot.
+        private const val SLOT_RESULT_APPLY_DELAY_MS = 2000L // V1 distance Create_0 alarm[0]=120 at 60fps.
+        private const val SLOT_BLINK_MS = 500L // V1 Step_0/Alarm_4 alarm[4]=30 at original 60fps.
         private const val RESULT_APPLY_DELAY_MS = 4000L
         private const val CARD_REVEAL_TICK_MS = 667L
         private const val CARD_DECISION_DELAY_MS = 4000L
@@ -945,6 +949,7 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private var statusDetailPage = 0
     private var statusReturnScreen = Screen.MENU
     private var mapPreviewArea = state.area
+    private var mapConfirmationDistance = 0
     private var frameCounter = 0
     private var lastStepAtMs = 0L
     private var lastActionLabel = "BOOT"
@@ -1088,8 +1093,17 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             }
             Screen.STATUS_DETAIL -> Unit
             Screen.MAP -> {
-                if (!isGameComplete()) return
+                if (!isGameComplete()) {
+                    // obj_menu_map_digivice_v1 KeyPress_37:19-23 rejects A with audio.
+                    audioManager.stopAll()
+                    playSound(DigiviceAudioManager.Cue.CANCEL)
+                    return
+                }
+                // obj_menu_map_digivice_v1 KeyPress_37:3-5 stops audio before confirmation.
+                audioManager.stopAll()
                 playSound(DigiviceAudioManager.Cue.SELECT)
+                // obj_menu_map_digivice_v1 KeyPress_37:7-16 snapshots distance at entry.
+                mapConfirmationDistance = currentMapTargetDistance()
                 screen = Screen.MAP_CHANGE
             }
             Screen.MAP_CHANGE -> {
@@ -1150,6 +1164,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             }
             Screen.MAP -> {
                 if (isGameComplete()) {
+                    // obj_menu_map_digivice_v1 KeyPress_38:3-5 stops audio before preview advance.
+                    audioManager.stopAll()
                     playSound(DigiviceAudioManager.Cue.SELECT)
                     mapPreviewArea = (mapPreviewArea + 1) % MAP_DISTANCES.size
                 }
@@ -1210,12 +1226,17 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                 screen = Screen.IDLE
             }
             Screen.MAP -> {
-                playSound(DigiviceAudioManager.Cue.CANCEL)
+                // obj_menu_map_digivice_v1 KeyPress_40:1-5 stops audio before SELECT.
+                audioManager.stopAll()
+                playSound(DigiviceAudioManager.Cue.SELECT)
+                menuIndex = 1
                 screen = Screen.MENU
             }
             Screen.MAP_CHANGE -> {
-                playSound(DigiviceAudioManager.Cue.CANCEL)
+                // obj_menu_change_map_digivice_v1 KeyPress_40:1-5 restores map before audio.
                 screen = Screen.MAP
+                audioManager.stopAll()
+                playSound(DigiviceAudioManager.Cue.SELECT)
             }
             Screen.FINISH_GAME, Screen.FINISH_RETURN -> Unit
             Screen.BATTLE -> handleBattleBack()
@@ -1347,9 +1368,11 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
 
     private fun handleSlotConfirm() {
         val session = slotSession ?: return
-        playSound(DigiviceAudioManager.Cue.SELECT)
         when (session.phase) {
             SlotPhase.READY -> {
+                // V1 KeyPress_37/38:3-6 stops all audio before SELECT on initial start only.
+                audioManager.stopAll()
+                playSound(DigiviceAudioManager.Cue.SELECT)
                 session.phase = SlotPhase.SPINNING
                 val now = System.currentTimeMillis()
                 session.nextReel1AtMs = now + SLOT_FAST_MS
@@ -1358,8 +1381,10 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
             SlotPhase.SPINNING -> {
                 if (!session.stop1) {
                     session.stop1 = true
+                    session.nextReel1AtMs = System.currentTimeMillis() + SLOT_STOP_REARM_MS
                 } else if (!session.stop2) {
                     session.stop2 = true
+                    session.nextReel2AtMs = System.currentTimeMillis() + SLOT_STOP_REARM_MS
                 }
             }
             SlotPhase.RESULT_WAIT, SlotPhase.RESULT_SCREEN -> Unit
@@ -1369,6 +1394,9 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     private fun handleSlotAdvance() = handleSlotConfirm()
 
     private fun handleSlotBack() {
+        val session = slotSession ?: return
+        // V1 KeyPress_40: completed counters ignore back, even before Step enters RESULT_WAIT.
+        if (session.counter1 == 3 && session.counter2 == 3) return
         playSound(DigiviceAudioManager.Cue.CANCEL)
         menuIndex = 2
         slotSession = null
@@ -1462,17 +1490,22 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
                     session.phase = SlotPhase.RESULT_WAIT
                     session.nextAnimationAtMs = now + SLOT_BLINK_MS
                     session.nextPhaseAtMs = now + SLOT_RESULT_DELAY_MS
-                    playResultCue(session.resultDistance)
+                    session.nextResultSoundAtMs = now + SLOT_RESULT_SOUND_DELAY_MS
                 }
             }
             SlotPhase.RESULT_WAIT -> {
+                if (session.nextResultSoundAtMs != 0L && now >= session.nextResultSoundAtMs) {
+                    session.nextResultSoundAtMs = 0L
+                    audioManager.stopAll() // V1 Alarm_3: stop previous sounds before the sign-specific cue.
+                    playResultCue(session.resultDistance)
+                }
                 if (now >= session.nextAnimationAtMs) {
                     session.animation = !session.animation
                     session.nextAnimationAtMs = now + SLOT_BLINK_MS
                 }
                 if (now >= session.nextPhaseAtMs) {
                     session.phase = SlotPhase.RESULT_SCREEN
-                    session.nextPhaseAtMs = now + RESULT_APPLY_DELAY_MS
+                    session.nextPhaseAtMs = now + SLOT_RESULT_APPLY_DELAY_MS
                     session.nextAnimationAtMs = 0L
                     screen = Screen.SLOT_RESULT
                     Log.d("DigiviceV1Runtime", "slot result pending distance=${session.resultDistance}")
@@ -2783,6 +2816,8 @@ class DigiviceV1Runtime(context: Context) : GlyphButtonSink {
     }
 
     private fun currentMapTargetDistance(): Int {
+        // Confirmation Draw_0:2 and KeyPress_37:1 use the entry snapshot.
+        if (screen == Screen.MAP_CHANGE) return mapConfirmationDistance
         return if (mapPreviewArea == state.area) state.distance else state.perAreaDistances[mapPreviewArea.coerceIn(state.perAreaDistances.indices)]
     }
 
